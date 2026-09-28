@@ -128,3 +128,7 @@ Note: Google Play's payment policy requires Play Billing for digital content bou
 
 - **30-second previews** (premium titles with no trailer) are stopped by the app at 30 s. The video file itself has to be streamable for that, so a technical user could watch past 30 s. Uploading a trailer for every premium title avoids this — then non-subscribers only ever get the trailer file.
 - Video is streamed as a single MP4 file. For large audiences, a video service with adaptive streaming (e.g. Cloudflare Stream, Mux) is the next upgrade.
+
+## Credits
+
+The app uses the **Poppins** font (© Indian Type Foundry, SIL Open Font License 1.1), bundled in `app/src/main/res/font/`.

@@ -1,5 +1,9 @@
 package com.streams.app.ui.screens
 
+import androidx.compose.material.icons.filled.LiveTv
+import com.streams.app.ui.theme.Poppins
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -98,7 +102,7 @@ fun ChannelsScreen(nav: NavController) {
                         else -> true
                     }
                 }
-                if (shown.isEmpty()) EmptyState("No channels match this filter.")
+                if (shown.isEmpty()) EmptyState(title = if (channels.isEmpty()) "No channels yet" else "Nothing here", message = if (channels.isEmpty()) "Channels will appear here soon." else "No channels match this filter.", icon = Icons.Default.LiveTv)
                 LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -117,24 +121,26 @@ private fun ChannelCard(ch: Channel, titles: List<Title>, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(Surface1)
             .clickable(onClick = onClick)
-            .padding(12.dp),
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(52.dp).clip(RoundedCornerShape(10.dp)).background(Surface2),
+            Modifier.size(56.dp).clip(RoundedCornerShape(14.dp)).background(
+                Brush.linearGradient(listOf(Red, Color(0xFF7F0A12))),
+            ),
             contentAlignment = Alignment.Center,
         ) {
-            Text(ch.name.take(1).uppercase(), color = Red, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Text(ch.name.take(1).uppercase(), color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, fontFamily = Poppins)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     ch.name,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),

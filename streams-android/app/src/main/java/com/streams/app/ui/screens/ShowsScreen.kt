@@ -1,5 +1,9 @@
 package com.streams.app.ui.screens
 
+import com.streams.app.ui.theme.Surface1
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,10 +57,18 @@ fun ShowsScreen(nav: NavController) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("Search titles") },
+            placeholder = { Text("Search movies & series") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = CircleShape,
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedContainerColor = Surface1,
+                focusedContainerColor = Surface1,
+                unfocusedBorderColor = Color.Transparent,
+                focusedBorderColor = Color.White.copy(alpha = 0.5f),
+                cursorColor = Color.White,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         )
         ChipRow(listOf("All", "Free", "Premium"), filter, { filter = it }, Modifier.padding(bottom = 8.dp))
 
@@ -71,12 +83,18 @@ fun ShowsScreen(nav: NavController) {
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 104.dp),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     if (list.isEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) { EmptyState("No titles found.") }
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            EmptyState(
+                                title = if (query.isBlank()) "No titles yet" else "No results for \"${query.trim()}\"",
+                                message = if (query.isBlank()) "New movies and series are on the way." else "Check the spelling or try another title.",
+                                icon = Icons.Default.Search,
+                            )
+                        }
                     }
                     items(list, key = { it.id }) { t -> PosterCard(t) { nav.navigate(Routes.title(t.id)) } }
                 }

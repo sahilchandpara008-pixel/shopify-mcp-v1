@@ -1,13 +1,20 @@
 package com.streams.app.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.LiveTv
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -19,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -42,17 +50,18 @@ import com.streams.app.ui.screens.ProfileScreen
 import com.streams.app.ui.screens.ShowsScreen
 import com.streams.app.ui.screens.TitleDetailScreen
 import com.streams.app.ui.theme.Bg
+import com.streams.app.ui.theme.Outline
 import com.streams.app.ui.theme.Red
 import com.streams.app.ui.theme.TextMuted
 import io.github.jan.supabase.auth.status.SessionStatus
 
-private data class Tab(val route: String, val label: String, val icon: ImageVector)
+private data class Tab(val route: String, val label: String, val icon: ImageVector, val iconOff: ImageVector)
 
 private val tabs = listOf(
-    Tab("home", "Home", Icons.Default.Home),
-    Tab("channels", "Channels", Icons.Default.LiveTv),
-    Tab("shows", "Shows", Icons.Default.GridView),
-    Tab("profile", "Profile", Icons.Default.Person),
+    Tab("home", "Home", Icons.Filled.Home, Icons.Outlined.Home),
+    Tab("channels", "Channels", Icons.Filled.LiveTv, Icons.Outlined.LiveTv),
+    Tab("shows", "Shows", Icons.Filled.VideoLibrary, Icons.Outlined.VideoLibrary),
+    Tab("profile", "Profile", Icons.Filled.Person, Icons.Outlined.Person),
 )
 
 object Routes {
@@ -142,10 +151,13 @@ fun AppNav() {
 
 @Composable
 private fun BottomBar(nav: NavHostController, route: String?) {
-    NavigationBar(containerColor = Color(0xFF111114)) {
+    Column {
+    HorizontalDivider(color = Outline.copy(alpha = 0.6f), thickness = 0.5.dp)
+    NavigationBar(containerColor = Color(0xFF0E0E11), tonalElevation = 0.dp) {
         tabs.forEach { tab ->
+            val selected = route == tab.route
             NavigationBarItem(
-                selected = route == tab.route,
+                selected = selected,
                 onClick = {
                     nav.navigate(tab.route) {
                         popUpTo("home") { saveState = true }
@@ -153,16 +165,17 @@ private fun BottomBar(nav: NavHostController, route: String?) {
                         restoreState = true
                     }
                 },
-                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label) },
+                icon = { Icon(if (selected) tab.icon else tab.iconOff, contentDescription = tab.label) },
+                label = { Text(tab.label, style = MaterialTheme.typography.labelMedium) },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Red,
-                    selectedTextColor = Red,
-                    indicatorColor = Color.Transparent,
+                    selectedIconColor = Color.White,
+                    selectedTextColor = Color.White,
+                    indicatorColor = Red.copy(alpha = 0.22f),
                     unselectedIconColor = TextMuted,
                     unselectedTextColor = TextMuted,
                 ),
             )
         }
+    }
     }
 }
