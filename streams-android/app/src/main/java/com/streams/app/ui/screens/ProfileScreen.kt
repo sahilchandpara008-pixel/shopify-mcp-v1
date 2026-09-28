@@ -93,6 +93,7 @@ private data class ProfileData(
     val plans: List<Plan>,
     val payments: List<Payment>,
     val settings: PaymentSettings?,
+    val adminRole: String?,
 )
 
 @Composable
@@ -106,7 +107,9 @@ fun ProfileScreen(nav: NavController) {
             val plans = async { Repo.plans() }
             val pays = async { if (email != null) Repo.myPayments() else emptyList() }
             val settings = async { runCatching { Repo.paymentSettings() }.getOrNull() }
-            ProfileData(email, sub.await(), plans.await(), pays.await(), settings.await())
+            // Only owner/manager accounts get a role back; everyone else gets null.
+            val role = async { if (email != null) runCatching { Repo.myAdminRole() }.getOrNull() else null }
+            ProfileData(email, sub.await(), plans.await(), pays.await(), settings.await(), role.await())
         }
     }
     var versionTaps by remember { mutableIntStateOf(0) }
@@ -129,6 +132,17 @@ fun ProfileScreen(nav: NavController) {
                     )
                 }
                 item { AccountCard(d.email, d.subscription, nav) }
+                if (d.adminRole != null) {
+                    item {
+                        Button(
+                            onClick = { nav.navigate("admin") },
+                            colors = ButtonDefaults.buttonColors(containerColor = Surface2, contentColor = Color.White),
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                        ) {
+                            Text("Open admin panel (${if (d.adminRole == "owner") "Owner" else "Manager"})")
+                        }
+                    }
+                }
 
                 item { Text("Choose a plan", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp)) }
                 item {
