@@ -379,8 +379,22 @@ create policy "admins delete videos" on storage.objects for delete using (bucket
 insert into public.admin_emails (email, role) values (lower('YOUR_OWNER_EMAIL@example.com'), 'owner');
 
 -- ---------------------------------------------------------------------
--- 11. (Optional) nightly expiry sweep. Enable "pg_cron" first under
---     Database → Extensions, then run these two lines separately:
+-- 11. FUNCTION ACCESS — admin/payment functions are not callable by guests,
+--     internal ones are not callable through the API at all.
 -- ---------------------------------------------------------------------
--- create extension if not exists pg_cron;
--- select cron.schedule('expire-subscriptions', '*/30 * * * *', 'select public.expire_subscriptions()');
+revoke execute on function public.admin_stats() from public, anon;
+revoke execute on function public.approve_payment(uuid) from public, anon;
+revoke execute on function public.reject_payment(uuid, text) from public, anon;
+revoke execute on function public.submit_payment(uuid, text) from public, anon;
+grant execute on function public.admin_stats() to authenticated;
+grant execute on function public.approve_payment(uuid) to authenticated;
+grant execute on function public.reject_payment(uuid, text) to authenticated;
+grant execute on function public.submit_payment(uuid, text) to authenticated;
+revoke execute on function public.expire_subscriptions() from public, anon, authenticated;
+revoke execute on function public.payments_before_insert() from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 12. Expiry sweep every 30 minutes (pg_cron is available on all Supabase plans).
+-- ---------------------------------------------------------------------
+create extension if not exists pg_cron;
+select cron.schedule('expire-subscriptions', '*/30 * * * *', 'select public.expire_subscriptions()');

@@ -14,6 +14,14 @@ val localProps = Properties().apply {
 }
 fun prop(name: String) = (localProps.getProperty(name) ?: "").trim()
 
+// The Streams Supabase project. The anon key is public by design (every APK contains it);
+// all protection comes from the row-level security rules in supabase/schema.sql.
+// local.properties values, when set, override these.
+val supabaseUrl = prop("SUPABASE_URL").ifEmpty { "https://kpnfncydvpzlrcjplazh.supabase.co" }
+val supabaseAnonKey = prop("SUPABASE_ANON_KEY").ifEmpty {
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwbmZuY3lkdnB6bHJjanBsYXpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1NzMzODYsImV4cCI6MjEwNjE0OTM4Nn0.PUY0H_NywecExxdKCmUzwz_lhJKnI0jgjvRB546bQbI"
+}
+
 android {
     namespace = "com.streams.app"
     compileSdk = 36
@@ -25,8 +33,8 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        buildConfigField("String", "SUPABASE_URL", "\"${prop("SUPABASE_URL")}\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${prop("SUPABASE_ANON_KEY")}\"")
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
 
     buildTypes {

@@ -51,15 +51,9 @@ streams-android/
 
 **Video size:** on the free plan, each uploaded file is limited to 50 MB. For full-length videos, upgrade to Pro and raise **Storage → Settings → Upload file size limit**.
 
-## Step 4 — Put your keys into the app
+## Step 4 — Keys (already done)
 
-1. In Supabase: **Project Settings → API**. Copy the **Project URL** and the **anon public** key.
-2. In the `streams-android` folder, create a file called `local.properties` (Android Studio may already have created it with an `sdk.dir=` line — keep that line) and add:
-   ```
-   SUPABASE_URL=https://YOUR-PROJECT-REF.supabase.co
-   SUPABASE_ANON_KEY=eyJhbGciOi...your anon key...
-   ```
-   This file is never uploaded to GitHub. The anon key is safe to ship in an app — all protection comes from the security rules in `schema.sql`.
+The app is already connected to the Streams Supabase project (`kpnfncydvpzlrcjplazh`, Mumbai): its URL and public anon key are built in via `app/build.gradle.kts`. To point the app at a different project, put `SUPABASE_URL=` and `SUPABASE_ANON_KEY=` lines in `local.properties` (or GitHub Actions secrets with the same names) — those override the built-in values.
 
 ## Step 5 — Open and run in Android Studio
 
