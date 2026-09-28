@@ -25,6 +25,9 @@ object AppState {
     /** Bumped whenever access may have changed (login/logout/approval) so screens reload. */
     val accessVersion = MutableStateFlow(0)
 
+    /** Set by the Cloud tab's "+" button so Profile scrolls straight to the plans. */
+    val scrollToPlans = MutableStateFlow(false)
+
     /** Set by MainActivity when the admin "set password" e-mail link is opened. */
     val pendingRoute = MutableStateFlow<String?>(null)
 

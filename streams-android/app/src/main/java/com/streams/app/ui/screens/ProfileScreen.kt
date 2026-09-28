@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -127,14 +129,24 @@ fun ProfileScreen(nav: NavController) {
         }
     }
     var versionTaps by remember { mutableIntStateOf(0) }
+    val listState = rememberLazyListState()
+    val scrollToPlans by AppState.scrollToPlans.collectAsStateWithLifecycle()
 
     when (val s = load.state) {
         Load.Loading -> Loading()
         is Load.Err -> ErrorState(s.message, load.reload)
         is Load.Ok -> {
             val d = s.data
+            // Coming from the Cloud tab's "+": jump to the Premium card + plans.
+            LaunchedEffect(scrollToPlans) {
+                if (scrollToPlans) {
+                    listState.animateScrollToItem(if (d.adminRole != null) 3 else 2)
+                    AppState.scrollToPlans.value = false
+                }
+            }
             LazyColumn(
                 Modifier.fillMaxSize().imePadding(),
+                state = listState,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
