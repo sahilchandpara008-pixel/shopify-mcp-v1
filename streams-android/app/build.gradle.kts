@@ -30,8 +30,11 @@ android {
         applicationId = "com.streams.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        // Every GitHub build gets its own number, so a newer APK always installs as an update
+        // and Profile shows exactly which build is on the phone.
+        val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = 100 + buildNumber
+        versionName = "1.1.$buildNumber"
 
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
