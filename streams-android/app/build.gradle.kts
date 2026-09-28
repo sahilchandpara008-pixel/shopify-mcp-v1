@@ -37,6 +37,18 @@ android {
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
     }
 
+    // Fixed test-signing key (app/debug.keystore, standard Android debug passwords) so every
+    // GitHub-built APK installs over the previous one instead of failing with "App not installed".
+    // Not for Play Store releases — those need your own private upload key.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

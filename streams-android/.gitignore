@@ -9,4 +9,5 @@
 .externalNativeBuild/
 .cxx/
 *.keystore
+!app/debug.keystore
 *.jks
