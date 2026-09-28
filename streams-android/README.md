@@ -84,6 +84,16 @@ In **Admin**:
 4. **Campaigns** → a short banner shown at the top of Home while active.
 5. **Team** (owner only) → add manager emails. **Settings** (owner only) → change the UPI ID / payee name.
 
+## Web admin panel (for computers)
+
+`docs/index.html` in this repository is a browser version of the admin panel (same features: stats, payments, uploads with a progress bar, channels, campaigns, team, settings). It is published with GitHub Pages:
+
+1. GitHub repo → **Settings → Pages** → Source: **Deploy from a branch** → Branch: the branch containing `docs/` (e.g. `main` after merging) → Folder: **/docs** → Save.
+2. After ~1 minute it is live at `https://sahilchandpara008-pixel.github.io/shopify-mcp-v1/`.
+3. For “Forgot password?” on the web panel, add `https://sahilchandpara008-pixel.github.io/**` to Supabase → Authentication → URL Configuration → Redirect URLs.
+
+Only owner/manager accounts can sign in; everyone else is signed straight back out, and the database rejects admin actions from anyone else anyway.
+
 ## How payments work
 
 1. Customer picks a plan on **Profile** → taps **Open UPI app** (amount pre-filled) or pays manually to the UPI ID shown.
