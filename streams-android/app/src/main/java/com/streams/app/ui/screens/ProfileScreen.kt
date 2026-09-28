@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -85,6 +87,7 @@ import com.streams.app.ui.components.ErrorState
 import com.streams.app.ui.components.Loading
 import com.streams.app.ui.components.PremiumBenefitsCard
 import com.streams.app.ui.components.PrimaryButton
+import com.streams.app.ui.components.SecondaryButton
 import com.streams.app.ui.components.formatDate
 import com.streams.app.ui.components.formatPrice
 import com.streams.app.ui.theme.Amber
@@ -329,9 +332,48 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var submitted by remember { mutableStateOf<Payment?>(null) }
+    var activated by remember { mutableStateOf<Payment?>(null) }
+    var showManual by remember { mutableStateOf(false) }
+    // The order created on the server just before the UPI app was opened.
+    var order by remember { mutableStateOf<Payment?>(null) }
     val pending = submitted ?: d.payments.firstOrNull { it.status == "pending" }
 
+    // The UPI app returns "txnId=..&Status=SUCCESS&ApprovalRefNo=.." — the server checks it
+    // and applies the plan straight away.
+    val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val o = order ?: return@rememberLauncherForActivityResult
+        val response = upiResponse(result.data)
+        if (response == null) {
+            busy = false
+            error = "Payment was not completed. If money was debited, enter the UTR below."
+            showManual = true
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            runCatching { Repo.confirmUpiPayment(o.id, response) }
+                .onSuccess { activated = it; order = null; onSubmitted() }
+                .onFailure { error = it.friendly() + "\nIf money was debited, enter the UTR below."; showManual = true }
+            busy = false
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        activated?.let { p ->
+            Card {
+                Row {
+                    Icon(Icons.Default.CheckCircle, null, tint = Green)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Payment successful — ${p.planName ?: "plan"} is active!", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "${formatPrice(p.amount)} · UTR ${p.utr}\nEnjoy all Premium content right away.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
         if (pending != null) {
             Card {
                 Row {
@@ -373,55 +415,83 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                     Text("Pay for ${plan.name}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(formatPrice(plan.price), style = MaterialTheme.typography.headlineSmall)
                 }
-
-                Step(1, "Pay with any UPI app")
-                PrimaryButton("Pay ${formatPrice(plan.price)} via UPI", { openUpi(context, settings, plan) })
-                Row(
-                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(Surface2).padding(start = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
-                        Text("Or pay manually to", style = MaterialTheme.typography.bodySmall)
-                        Text(settings.upiId, style = MaterialTheme.typography.titleSmall)
-                        Text(settings.payeeName, style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = { copy(context, settings.upiId) }) { Icon(Icons.Default.ContentCopy, "Copy UPI ID", tint = Color.White) }
-                }
-
-                Step(2, "Enter the UTR / reference number")
                 Text(
-                    "After paying, your UPI app shows a 12-digit UTR or transaction ID (e.g. in payment details).",
+                    "Pay with Google Pay, PhonePe, Paytm or any UPI app. Your plan starts automatically as soon as the payment succeeds.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                OutlinedTextField(
-                    value = utr,
-                    onValueChange = { v -> utr = v.filter { it.isLetterOrDigit() }.take(35).uppercase() },
-                    label = { Text("UTR / reference number") },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.small,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.White, cursorColor = Color.White, focusedLabelColor = Color.White),
-                    modifier = Modifier.fillMaxWidth(),
+                PrimaryButton(
+                    "Pay ${formatPrice(plan.price)} via UPI",
+                    onClick = {
+                        busy = true; error = null
+                        scope.launch {
+                            runCatching { Repo.startUpiPayment(plan.id) }
+                                .onSuccess { o ->
+                                    order = o
+                                    try {
+                                        upiLauncher.launch(Intent.createChooser(upiIntent(settings, plan, o.reference), "Pay with"))
+                                    } catch (_: ActivityNotFoundException) {
+                                        busy = false
+                                        error = "No UPI app found on this phone."
+                                    }
+                                }
+                                .onFailure { busy = false; error = it.friendly() }
+                        }
+                    },
+                    loading = busy,
                 )
                 AnimatedVisibility(error != null) {
                     Text(error ?: "", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                 }
-                Step(3, "Submit — we'll verify and activate your plan")
-                PrimaryButton(
-                    "Submit for verification",
-                    onClick = {
-                        if (utr.length < 6) { error = "Please enter the full reference number from your UPI app"; return@PrimaryButton }
-                        busy = true; error = null
-                        scope.launch {
-                            runCatching { Repo.submitPayment(plan.id, utr) }
-                                .onSuccess { submitted = it; utr = ""; onSubmitted() }
-                                .onFailure { error = it.friendly() }
-                            busy = false
-                        }
-                    },
-                    loading = busy,
-                    enabled = utr.length >= 6,
+
+                // Fallback when the UPI app doesn't report back (or the phone has none).
+                Text(
+                    if (showManual) "Hide manual payment" else "Paid but plan not active? Enter UTR",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextMuted,
+                    modifier = Modifier.clickable { showManual = !showManual }.padding(vertical = 4.dp),
                 )
+                AnimatedVisibility(showManual) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(Surface2).padding(start = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+                                Text("UPI ID", style = MaterialTheme.typography.bodySmall)
+                                Text(settings.upiId, style = MaterialTheme.typography.titleSmall)
+                                Text(settings.payeeName, style = MaterialTheme.typography.bodySmall)
+                            }
+                            IconButton(onClick = { copy(context, settings.upiId) }) { Icon(Icons.Default.ContentCopy, "Copy UPI ID", tint = Color.White) }
+                        }
+                        Text(
+                            "Your UPI app shows a 12-digit UTR or transaction ID in the payment details. We'll verify it and activate your plan.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        OutlinedTextField(
+                            value = utr,
+                            onValueChange = { v -> utr = v.filter { it.isLetterOrDigit() }.take(35).uppercase() },
+                            label = { Text("UTR / reference number") },
+                            singleLine = true,
+                            shape = MaterialTheme.shapes.small,
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.White, cursorColor = Color.White, focusedLabelColor = Color.White),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        SecondaryButton(
+                            "Submit for verification",
+                            onClick = {
+                                busy = true; error = null
+                                scope.launch {
+                                    runCatching { Repo.submitPayment(plan.id, utr) }
+                                        .onSuccess { submitted = it; utr = ""; onSubmitted() }
+                                        .onFailure { error = it.friendly() }
+                                    busy = false
+                                }
+                            },
+                            enabled = utr.length >= 6 && !busy,
+                        )
+                    }
+                }
             }
         }
     }
@@ -475,21 +545,11 @@ private fun PlanCard(plan: Plan, selected: Boolean, popular: Boolean, onClick: (
 }
 
 @Composable
-private fun Step(n: Int, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(22.dp).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
-            Text("$n", color = Color.Black, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(10.dp))
-        Text(text, style = MaterialTheme.typography.titleSmall)
-    }
-}
-
-@Composable
 private fun PaymentRow(p: Payment) {
     val (label, color) = when (p.status) {
-        "approved" -> "Approved" to Green
+        "approved" -> (if (p.isAuto) "Paid" else "Approved") to Green
         "rejected" -> "Rejected" to MaterialTheme.colorScheme.error
+        "revoked" -> "Cancelled" to MaterialTheme.colorScheme.error
         else -> "Waiting" to Amber
     }
     Row(
@@ -498,8 +558,8 @@ private fun PaymentRow(p: Payment) {
     ) {
         Column(Modifier.weight(1f)) {
             Text("${p.planName ?: "Plan"} · ${formatPrice(p.amount)}", style = MaterialTheme.typography.titleSmall)
-            Text("${formatDate(p.createdAt)} · Ref ${p.reference}", style = MaterialTheme.typography.bodySmall)
-            p.adminNote?.takeIf { p.status == "rejected" }?.let {
+            Text("${formatDate(p.createdAt)} · UTR ${p.utr}", style = MaterialTheme.typography.bodySmall)
+            p.adminNote?.takeIf { p.status == "rejected" || p.status == "revoked" }?.let {
                 Text("Reason: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
@@ -512,21 +572,26 @@ private fun PaymentRow(p: Payment) {
     }
 }
 
-/** Builds upi://pay?... — just a shortcut to pre-fill the UPI app. It is NOT proof of payment. */
-private fun openUpi(context: Context, s: PaymentSettings, plan: Plan) {
+/** upi://pay?... pre-filled with the plan price; the note carries our order reference. */
+private fun upiIntent(s: PaymentSettings, plan: Plan, reference: String): Intent {
     val uri = Uri.Builder()
         .scheme("upi").authority("pay")
         .appendQueryParameter("pa", s.upiId)
         .appendQueryParameter("pn", s.payeeName)
         .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, plan.price))
         .appendQueryParameter("cu", "INR")
-        .appendQueryParameter("tn", "Streams ${plan.name}")
+        .appendQueryParameter("tn", "Streams $reference")
         .build()
-    try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, "No UPI app found. Pay to ${s.upiId} manually.", Toast.LENGTH_LONG).show()
-    }
+    return Intent(Intent.ACTION_VIEW, uri)
+}
+
+/** UPI apps return "txnId=..&Status=..", usually in the "response" extra; a few send separate extras. */
+private fun upiResponse(data: Intent?): String? {
+    data ?: return null
+    data.getStringExtra("response")?.takeIf { it.isNotBlank() }?.let { return it }
+    val extras = data.extras ?: return null
+    val pairs = extras.keySet().mapNotNull { k -> extras.getString(k)?.let { "$k=$it" } }
+    return pairs.takeIf { list -> list.any { it.startsWith("Status=", ignoreCase = true) } }?.joinToString("&")
 }
 
 private fun copy(context: Context, text: String) {

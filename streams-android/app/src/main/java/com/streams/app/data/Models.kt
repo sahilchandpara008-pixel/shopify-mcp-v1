@@ -93,7 +93,15 @@ data class Payment(
     val status: String,
     @SerialName("admin_note") val adminNote: String? = null,
     @SerialName("created_at") val createdAt: String,
-)
+    /** "manual" (customer typed a UTR) or "upi_auto" (confirmed from the UPI app's response). */
+    val method: String = "manual",
+    @SerialName("txn_id") val txnId: String? = null,
+    @SerialName("reviewed_by") val reviewedBy: String? = null,
+) {
+    val isAuto get() = method == "upi_auto"
+    /** The number to look for in the bank statement. */
+    val utr get() = txnId ?: reference
+}
 
 @Serializable
 data class PaymentSettings(

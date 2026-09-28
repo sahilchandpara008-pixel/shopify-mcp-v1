@@ -448,3 +448,212 @@ create policy "cloud: premium uploads within quota" on storage.objects for inser
   );
 create policy "cloud: delete own files" on storage.objects for delete
   using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ---------------------------------------------------------------------
+-- 14. AUTOMATIC UPI CONFIRMATION (no payment gateway)
+--     1. App calls start_upi_payment(plan) → an 'initiated' row with our ref.
+--     2. App opens the UPI app; the UPI app hands back a response string
+--        (txnId, ApprovalRefNo/UTR, Status).
+--     3. App calls confirm_upi_payment(id, response) → if Status=SUCCESS the
+--        plan is applied immediately and the row is marked approved, method 'upi_auto'.
+--     NOTE: that response comes from the customer's phone, so it cannot be
+--     proven genuine. Admins match auto payments against the bank statement
+--     and can revoke_payment() one that never arrived (takes the days back).
+-- ---------------------------------------------------------------------
+alter table public.payments add column if not exists method       text not null default 'manual';
+alter table public.payments add column if not exists txn_id       text;
+alter table public.payments add column if not exists upi_response text;
+create unique index if not exists payments_txn_id_unique on public.payments (upper(txn_id)) where txn_id is not null;
+alter table public.payments drop constraint if exists payments_status_check;
+alter table public.payments add constraint payments_status_check
+  check (status in ('initiated', 'pending', 'approved', 'rejected', 'revoked'));
+alter table public.payments drop constraint if exists payments_method_check;
+alter table public.payments add constraint payments_method_check check (method in ('manual', 'upi_auto'));
+
+-- Client inserts are forced to a harmless state: a manual 'pending' UTR claim,
+-- or an 'initiated' auto payment (which only confirm_upi_payment can complete).
+create or replace function public.payments_before_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p public.subscription_plans;
+begin
+  select * into p from public.subscription_plans where id = new.plan_id and active;
+  if not found then raise exception 'This plan is not available'; end if;
+  new.reference   := upper(regexp_replace(new.reference, '\s', '', 'g'));
+  if new.reference !~ '^[A-Z0-9]{6,35}$' then
+    raise exception 'Reference number should be 6-35 letters/digits (check your UPI app)';
+  end if;
+  new.user_id     := auth.uid();
+  new.user_email  := auth.jwt() ->> 'email';
+  new.plan_name   := p.name;
+  new.amount      := p.price;
+  new.currency    := p.currency;
+  new.status      := case when new.status = 'initiated' then 'initiated' else 'pending' end;
+  new.method      := case when new.status = 'initiated' then 'upi_auto' else 'manual' end;
+  new.txn_id      := null;
+  new.upi_response := null;
+  new.admin_note  := null;
+  new.reviewed_at := null;
+  new.reviewed_by := null;
+  new.created_at  := now();
+  return new;
+end $$;
+
+drop policy if exists "user inserts own pending payment" on public.payments;
+create policy "user inserts own pending payment" on public.payments for insert
+  with check (auth.uid() is not null and user_id = auth.uid() and status in ('pending', 'initiated'));
+
+-- Shared by manual approval and automatic confirmation.
+-- new_expiry = max(now, current active expiry) + plan days (keeps unused time)
+create or replace function public.grant_plan_for_payment(pay public.payments)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  plan public.subscription_plans;
+  cur  public.subscriptions;
+  base timestamptz;
+begin
+  select * into plan from public.subscription_plans where id = pay.plan_id;
+  select * into cur  from public.subscriptions where user_id = pay.user_id for update;
+  base := greatest(now(), coalesce(case when cur.status = 'active' then cur.expires_at end, now()));
+  insert into public.subscriptions (user_id, user_email, plan_id, status, expires_at, updated_at)
+  values (pay.user_id, pay.user_email, pay.plan_id, 'active', base + make_interval(days => plan.duration_days), now())
+  on conflict (user_id) do update
+     set plan_id = excluded.plan_id, user_email = excluded.user_email, status = 'active',
+         expires_at = excluded.expires_at, updated_at = now();
+end $$;
+
+create or replace function public.approve_payment(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  -- Atomic "still pending?" check: a double tap cannot approve twice.
+  update public.payments
+     set status = 'approved', reviewed_at = now(), reviewed_by = auth.jwt() ->> 'email'
+   where id = p_payment_id and status = 'pending'
+  returning * into pay;
+  if not found then raise exception 'This payment was already processed'; end if;
+  perform public.grant_plan_for_payment(pay);
+  return pay;
+end $$;
+
+-- Step 1: the app asks for a fresh payment reference before opening the UPI app.
+create or replace function public.start_upi_payment(p_plan_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare r public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  -- An unfinished earlier attempt never granted anything, so it can go.
+  delete from public.payments where user_id = auth.uid() and status = 'initiated';
+  insert into public.payments (plan_id, reference, status)
+  values (p_plan_id, 'STR' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 14)), 'initiated')
+  returning * into r;
+  return r;
+end $$;
+
+-- Step 2: the app forwards the UPI app's response. SUCCESS → plan applied now.
+create or replace function public.confirm_upi_payment(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  kv     text;
+  f      jsonb := '{}';
+  st     text;
+  txn    text;
+  pay    public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if coalesce(length(p_response), 0) = 0 or length(p_response) > 2000 then
+    raise exception 'No response from the UPI app';
+  end if;
+
+  -- "txnId=..&responseCode=00&Status=SUCCESS&txnRef=..&ApprovalRefNo=.." (key case varies by app)
+  foreach kv in array string_to_array(p_response, '&') loop
+    if position('=' in kv) > 0 then
+      f := f || jsonb_build_object(lower(trim(split_part(kv, '=', 1))), trim(substr(kv, position('=' in kv) + 1)));
+    end if;
+  end loop;
+
+  st := lower(coalesce(f ->> 'status', ''));
+  if st <> 'success' then
+    raise exception 'The UPI app did not report a successful payment (status: %)', coalesce(nullif(st, ''), 'unknown');
+  end if;
+  txn := upper(regexp_replace(coalesce(nullif(f ->> 'approvalrefno', ''), nullif(f ->> 'txnid', ''), ''), '\s', '', 'g'));
+  if txn !~ '^[A-Z0-9]{6,40}$' then raise exception 'The UPI app did not return a transaction ID'; end if;
+  if exists (select 1 from public.payments where upper(txn_id) = txn or reference = txn) then
+    raise exception 'This transaction has already been used';
+  end if;
+
+  update public.payments
+     set status = 'approved', method = 'upi_auto', txn_id = txn, upi_response = left(p_response, 2000),
+         reviewed_at = now(), reviewed_by = 'auto (UPI app)'
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+     and created_at > now() - interval '30 minutes'
+  returning * into pay;
+  if not found then raise exception 'This payment has expired or was already processed. Please start again.'; end if;
+
+  perform public.grant_plan_for_payment(pay);
+  return pay;
+end $$;
+
+-- Admin: take back an approved payment whose money never arrived.
+create or replace function public.revoke_payment(p_payment_id uuid, p_note text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  pay  public.payments;
+  plan public.subscription_plans;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  if coalesce(length(trim(p_note)), 0) < 3 then raise exception 'Please type a short reason'; end if;
+  update public.payments
+     set status = 'revoked', admin_note = trim(p_note), reviewed_at = now(), reviewed_by = auth.jwt() ->> 'email'
+   where id = p_payment_id and status = 'approved'
+  returning * into pay;
+  if not found then raise exception 'Only approved payments can be revoked'; end if;
+
+  select * into plan from public.subscription_plans where id = pay.plan_id;
+  update public.subscriptions
+     set expires_at = expires_at - make_interval(days => plan.duration_days), updated_at = now()
+   where user_id = pay.user_id;
+  update public.subscriptions
+     set status = 'expired', updated_at = now()
+   where user_id = pay.user_id and status = 'active' and expires_at <= now();
+  return pay;
+end $$;
+
+-- Abandoned attempts (the customer backed out of the UPI app) are cleaned up by the sweep.
+create or replace function public.expire_subscriptions()
+returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  update public.subscriptions set status = 'expired', updated_at = now()
+  where status = 'active' and expires_at <= now();
+  get diagnostics n = row_count;
+  delete from public.payments where status = 'initiated' and created_at < now() - interval '1 day';
+  return n;
+end $$;
+
+revoke execute on function public.grant_plan_for_payment(public.payments) from public, anon, authenticated;
+revoke execute on function public.start_upi_payment(uuid) from public, anon;
+revoke execute on function public.confirm_upi_payment(uuid, text) from public, anon;
+revoke execute on function public.revoke_payment(uuid, text) from public, anon;
+grant execute on function public.start_upi_payment(uuid) to authenticated;
+grant execute on function public.confirm_upi_payment(uuid, text) to authenticated;
+grant execute on function public.revoke_payment(uuid, text) to authenticated;
+revoke execute on function public.expire_subscriptions() from public, anon, authenticated;
+
+-- A UTR that was already confirmed automatically can't be claimed again by hand.
+create or replace function public.submit_payment(p_plan_id uuid, p_reference text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  r   public.payments;
+  ref text := upper(regexp_replace(p_reference, '\s', '', 'g'));
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if exists (select 1 from public.payments where user_id = auth.uid() and status = 'pending') then
+    raise exception 'You already have a payment waiting for verification';
+  end if;
+  if exists (select 1 from public.payments where reference = ref or upper(txn_id) = ref) then
+    raise exception 'This reference number has already been submitted';
+  end if;
+  insert into public.payments (plan_id, reference) values (p_plan_id, p_reference) returning * into r;
+  return r;
+end $$;

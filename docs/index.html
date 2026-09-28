@@ -344,12 +344,12 @@ async function Overview(main) {
 // ---------------------------------------------------------------- Payments
 let payFilter = "pending";
 async function Payments(main) {
-  const filters = [["Waiting", "pending"], ["Approved", "approved"], ["Rejected", "rejected"], ["All", null]];
+  const filters = [["Waiting", "pending"], ["Approved", "approved"], ["Rejected", "rejected"], ["Revoked", "revoked"], ["All", null]];
   let q = sb.from("payments").select("*").order("created_at", { ascending: false }).limit(300);
-  if (payFilter) q = q.eq("status", payFilter);
+  q = payFilter ? q.eq("status", payFilter) : q.neq("status", "initiated");
   const rows = await must(q);
   main.innerHTML = `<h2>Payments</h2>
-    <p class="muted small">Check each UTR and amount against your bank / UPI statement before approving. Approving adds the plan's days to the customer's subscription (unused days are kept).</p>
+    <p class="muted small">Payments made through the app's “Pay via UPI” button are confirmed automatically from the UPI app's response (marked <b>Auto</b>). Match their UTR against your bank statement and <b>Revoke</b> any that never arrived — that takes the plan's days back. “Waiting” holds UTRs customers typed by hand: check them and approve or reject.</p>
     <div class="chips">${filters.map(([l, v]) => `<button class="chip ${v === payFilter ? "on" : ""}" data-f="${v ?? ""}">${l}</button>`).join("")}</div>
     <div class="list" id="payList"></div>`;
   main.querySelectorAll(".chip").forEach(c => c.onclick = () => { payFilter = c.dataset.f || null; renderTabs(); });
@@ -357,15 +357,18 @@ async function Payments(main) {
   if (!rows.length) { list.innerHTML = `<div class="empty">Nothing here.</div>`; return; }
   for (const p of rows) {
     const el = document.createElement("div"); el.className = "item";
-    const statusColor = p.status === "approved" ? "var(--green)" : p.status === "rejected" ? "var(--err)" : "var(--amber)";
+    const statusColor = p.status === "approved" ? "var(--green)" : p.status === "pending" ? "var(--amber)" : "var(--err)";
+    const utr = p.txn_id || p.reference, auto = p.method === "upi_auto";
     el.innerHTML = `<div class="body">
         <div class="row"><span class="title">${esc(p.user_email || "—")}</span><span class="spacer"></span><b>${rupees(p.amount)}</b></div>
         <div class="muted small">${esc(p.plan_name)} · ${when(p.created_at)}</div>
-        <div class="utr">UTR: ${esc(p.reference)}</div>
-        ${p.status === "rejected" && p.admin_note ? `<div class="small muted">Note: ${esc(p.admin_note)}</div>` : ""}
+        <div class="utr">UTR: ${esc(utr)}</div>
+        ${auto ? `<div class="small muted">Auto · confirmed by the UPI app · order ${esc(p.reference)}</div>` : ""}
+        ${(p.status === "rejected" || p.status === "revoked") && p.admin_note ? `<div class="small muted">Note: ${esc(p.admin_note)}</div>` : ""}
         ${p.status !== "pending" ? `<div class="small" style="color:${statusColor}">${esc(p.status[0].toUpperCase() + p.status.slice(1))}${p.reviewed_by ? " by " + esc(p.reviewed_by) : ""}</div>` : ""}
       </div>
-      ${p.status === "pending" ? `<div class="row"><button class="btn primary" data-a="approve">Approve</button><button class="btn" data-a="reject">Reject</button></div>` : ""}`;
+      ${p.status === "pending" ? `<div class="row"><button class="btn primary" data-a="approve">Approve</button><button class="btn" data-a="reject">Reject</button></div>` : ""}
+      ${p.status === "approved" ? `<div class="row"><button class="btn" data-a="revoke">Revoke</button></div>` : ""}`;
     const ap = el.querySelector('[data-a="approve"]');
     if (ap) ap.onclick = async () => {
       if (!confirm(`Approve ${rupees(p.amount)} from ${p.user_email} (UTR ${p.reference})?`)) return;
@@ -385,6 +388,18 @@ async function Payments(main) {
           btn.disabled = true;
           try { await must(sb.rpc("reject_payment", { p_payment_id: p.id, p_note: note })); dlg.close(); renderTabs(); }
           catch (err) { $("rejErr").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; btn.disabled = false; }
+        } }]);
+    const rv = el.querySelector('[data-a="revoke"]');
+    if (rv) rv.onclick = () => openDialog("Revoke payment?",
+      `<p class="muted">UTR ${esc(utr)} · ${rupees(p.amount)} · ${esc(p.user_email)}<br>The plan's days are taken back from this customer.</p>
+       <label>Reason (shown to the customer)</label><input type="text" id="rvNote"><div id="rvErr"></div>`,
+      [{ label: "Cancel", onClick: () => dlg.close() },
+       { label: "Revoke", cls: "danger", onClick: async btn => {
+          const note = $("rvNote").value.trim();
+          if (note.length < 3) { $("rvErr").innerHTML = `<div class="err">Please type a short reason.</div>`; return; }
+          btn.disabled = true;
+          try { await must(sb.rpc("revoke_payment", { p_payment_id: p.id, p_note: note })); dlg.close(); renderTabs(); }
+          catch (err) { $("rvErr").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; btn.disabled = false; }
         } }]);
     list.appendChild(el);
   }

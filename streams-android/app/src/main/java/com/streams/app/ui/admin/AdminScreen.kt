@@ -204,10 +204,11 @@ private fun OverviewTab() {
 private fun PaymentsTab() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "All" to null)
+    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Revoked" to "revoked", "All" to null)
     var filter by rememberSaveable { mutableStateOf("Waiting") }
     var busyId by remember { mutableStateOf<String?>(null) }
     var rejecting by remember { mutableStateOf<Payment?>(null) }
+    var revoking by remember { mutableStateOf<Payment?>(null) }
     val load = rememberLoad(filter) { Repo.adminPayments(filters[filter]) }
 
     Column {
@@ -227,8 +228,14 @@ private fun PaymentsTab() {
                             Text(formatPrice(p.amount), style = MaterialTheme.typography.titleMedium)
                         }
                         Text("${p.planName} · ${formatDate(p.createdAt)}", style = MaterialTheme.typography.bodySmall)
-                        Text("UTR: ${p.reference}", style = MaterialTheme.typography.titleSmall, color = Amber, modifier = Modifier.padding(top = 4.dp))
-                        if (p.status == "rejected") p.adminNote?.let { Text("Note: $it", style = MaterialTheme.typography.bodySmall) }
+                        Text("UTR: ${p.utr}", style = MaterialTheme.typography.titleSmall, color = Amber, modifier = Modifier.padding(top = 4.dp))
+                        if (p.isAuto) {
+                            Text(
+                                "Auto-confirmed by UPI app · order ${p.reference} — check this UTR in your bank",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (p.status == "rejected" || p.status == "revoked") p.adminNote?.let { Text("Note: $it", style = MaterialTheme.typography.bodySmall) }
                         if (p.status == "pending") {
                             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 BusyButton("Approve", busyId == p.id, Modifier.weight(1f)) {
@@ -244,12 +251,16 @@ private fun PaymentsTab() {
                                 OutlinedButton(onClick = { rejecting = p }, modifier = Modifier.weight(1f)) { Text("Reject") }
                             }
                         } else {
-                            Text(
-                                p.status.replaceFirstChar { it.uppercase() },
-                                color = if (p.status == "approved") Green else MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
+                            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    p.status.replaceFirstChar { it.uppercase() } + (p.reviewedBy?.let { " · $it" } ?: ""),
+                                    color = if (p.status == "approved") Green else MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                // Money never arrived? Take the plan days back.
+                                if (p.status == "approved") TextButton(onClick = { revoking = p }) { Text("Revoke") }
+                            }
                         }
                     }
                 }
@@ -281,6 +292,36 @@ private fun PaymentsTab() {
                 }) { Text("Reject") }
             },
             dismissButton = { TextButton(onClick = { rejecting = null }) { Text("Cancel") } },
+        )
+    }
+
+    revoking?.let { p ->
+        var note by remember { mutableStateOf("") }
+        var err by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { revoking = null },
+            title = { Text("Revoke payment?") },
+            text = {
+                Column {
+                    Text(
+                        "UTR ${p.utr} · ${formatPrice(p.amount)}\nThe plan's days are taken back from ${p.userEmail ?: "this customer"}.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(note, { note = it }, label = { Text("Reason (shown to customer)") }, modifier = Modifier.padding(top = 8.dp))
+                    err?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (note.trim().length < 3) { err = "Please type a short reason"; return@TextButton }
+                    scope.launch {
+                        runCatching { Repo.revokePayment(p.id, note) }
+                            .onSuccess { revoking = null; load.reload() }
+                            .onFailure { err = it.friendly() }
+                    }
+                }) { Text("Revoke") }
+            },
+            dismissButton = { TextButton(onClick = { revoking = null }) { Text("Cancel") } },
         )
     }
 }

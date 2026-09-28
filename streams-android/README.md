@@ -96,12 +96,17 @@ Only owner/manager accounts can sign in; everyone else is signed straight back o
 
 ## How payments work
 
-1. Customer picks a plan on **Profile** → taps **Open UPI app** (amount pre-filled) or pays manually to the UPI ID shown.
-2. Customer types the **UTR / reference number** and taps **Submit for verification** → status "Waiting".
-3. You check your bank/UPI statement for that UTR and amount, then in **Admin → Payments** tap **Approve** (or **Reject** with a reason).
-4. Approve extends the plan: `new expiry = later of (now, current expiry) + plan days` — unused days are kept.
+**Automatic (default).**
+1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order at the plan's real price.
+2. Their UPI app (GPay, PhonePe, Paytm…) opens with the amount filled in; the note carries the order number (`Streams STR…`).
+3. When they return, the UPI app's response (`Status=SUCCESS`, transaction ID / UTR) is sent to `confirm_upi_payment`, which applies the plan **immediately**: `new expiry = later of (now, current expiry) + plan days`.
+4. The payment shows in **Admin → Payments → Approved** marked *Auto*. Match its UTR in your bank statement; if the money never arrived, tap **Revoke** — the plan's days are taken back.
 
-Built-in protections (all enforced in the database, not in the app): the price always comes from the plans table; a customer can only create *pending* payments for themselves; one pending payment per customer; a UTR can only be used once; only owner/manager accounts can approve; a double-tap cannot approve twice; customers can never write to their own subscription.
+**Manual fallback.** If the UPI app doesn't report back, the customer taps *Paid but plan not active? Enter UTR*, types the UTR, and it waits in **Payments → Waiting** for you to Approve or Reject.
+
+> ⚠️ Without a payment gateway the "success" message comes from the customer's phone and can't be proven genuine, which is why auto payments stay revocable. Some UPI apps also block app-initiated payments to personal UPI IDs — customers then use the manual fallback. A gateway (Razorpay/Cashfree) removes both limits.
+
+Built-in protections (all enforced in the database, not in the app): the price always comes from the plans table; a customer can only create *pending*/*initiated* payments for themselves; an auto confirmation needs a SUCCESS status, must arrive within 30 minutes of the order, and each transaction ID works once; one pending payment per customer; a UTR can only be used once; only owner/manager accounts can approve; a double-tap cannot approve twice; customers can never write to their own subscription.
 
 ## Step 8 — Test checklist
 

@@ -114,7 +114,7 @@ object Repo {
     suspend fun myPayments(): List<Payment> {
         val uid = supabase.auth.currentUserOrNull()?.id ?: return emptyList()
         return supabase.from("payments").select {
-            filter { eq("user_id", uid) }
+            filter { eq("user_id", uid); neq("status", "initiated") }
             order("created_at", Order.DESCENDING)
         }.decodeList()
     }
@@ -125,12 +125,22 @@ object Repo {
             put("p_plan_id", planId); put("p_reference", reference)
         }).decodeAs()
 
+    /** Step 1 of an automatic UPI payment: the server creates the order at the plan's real price. */
+    suspend fun startUpiPayment(planId: String): Payment =
+        supabase.postgrest.rpc("start_upi_payment", buildJsonObject { put("p_plan_id", planId) }).decodeAs()
+
+    /** Step 2: forward the UPI app's response; on Status=SUCCESS the plan is applied immediately. */
+    suspend fun confirmUpiPayment(paymentId: String, response: String): Payment =
+        supabase.postgrest.rpc("confirm_upi_payment", buildJsonObject {
+            put("p_payment_id", paymentId); put("p_response", response)
+        }).decodeAs()
+
     // ---------------------------------------------------------------- admin
     suspend fun adminStats(): AdminStats = supabase.postgrest.rpc("admin_stats").decodeAs()
 
     suspend fun adminPayments(status: String?): List<Payment> =
         supabase.from("payments").select {
-            if (status != null) filter { eq("status", status) }
+            filter { if (status != null) eq("status", status) else neq("status", "initiated") }
             order("created_at", Order.DESCENDING)
             limit(200)
         }.decodeList()
@@ -141,6 +151,12 @@ object Repo {
 
     suspend fun rejectPayment(id: String, note: String) {
         supabase.postgrest.rpc("reject_payment", buildJsonObject {
+            put("p_payment_id", id); put("p_note", note)
+        })
+    }
+
+    suspend fun revokePayment(id: String, note: String) {
+        supabase.postgrest.rpc("revoke_payment", buildJsonObject {
             put("p_payment_id", id); put("p_note", note)
         })
     }
