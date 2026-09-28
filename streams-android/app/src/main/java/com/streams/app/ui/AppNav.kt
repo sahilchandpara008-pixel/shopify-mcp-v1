@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LiveTv
 import androidx.compose.material.icons.outlined.Person
@@ -44,6 +46,7 @@ import com.streams.app.ui.components.Loading
 import com.streams.app.ui.screens.AuthScreen
 import com.streams.app.ui.screens.ChannelDetailScreen
 import com.streams.app.ui.screens.ChannelsScreen
+import com.streams.app.ui.screens.CloudScreen
 import com.streams.app.ui.screens.HomeScreen
 import com.streams.app.ui.screens.PlayerScreen
 import com.streams.app.ui.screens.ProfileScreen
@@ -61,6 +64,7 @@ private val tabs = listOf(
     Tab("home", "Home", Icons.Filled.Home, Icons.Outlined.Home),
     Tab("channels", "Channels", Icons.Filled.LiveTv, Icons.Outlined.LiveTv),
     Tab("shows", "Shows", Icons.Filled.VideoLibrary, Icons.Outlined.VideoLibrary),
+    Tab("cloud", "Cloud", Icons.Filled.Cloud, Icons.Outlined.Cloud),
     Tab("profile", "Profile", Icons.Filled.Person, Icons.Outlined.Person),
 )
 
@@ -114,6 +118,7 @@ fun AppNav() {
             composable("home") { HomeScreen(nav) }
             composable("channels") { ChannelsScreen(nav) }
             composable("shows") { ShowsScreen(nav) }
+            composable("cloud") { CloudScreen(nav) }
             composable("profile") { ProfileScreen(nav) }
             composable("channel/{id}") { ChannelDetailScreen(nav, it.arguments?.getString("id")!!) }
             composable("title/{id}") { TitleDetailScreen(nav, it.arguments?.getString("id")!!) }
@@ -166,7 +171,7 @@ private fun BottomBar(nav: NavHostController, route: String?) {
                     }
                 },
                 icon = { Icon(if (selected) tab.icon else tab.iconOff, contentDescription = tab.label) },
-                label = { Text(tab.label, style = MaterialTheme.typography.labelMedium) },
+                label = { Text(tab.label, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false) },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = Color.White,
                     selectedTextColor = Color.White,

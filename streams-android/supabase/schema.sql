@@ -400,3 +400,51 @@ revoke execute on function public.payments_before_insert() from public, anon, au
 -- ---------------------------------------------------------------------
 create extension if not exists pg_cron;
 select cron.schedule('expire-subscriptions', '*/30 * * * *', 'select public.expire_subscriptions()');
+
+-- ---------------------------------------------------------------------
+-- 13. PREMIUM CLOUD STORAGE — each member gets a private folder
+--     user-files/<user id>/... Uploads need an active plan and stay under
+--     app_settings.cloud_quota_gb. Deleting always works (to free space).
+-- ---------------------------------------------------------------------
+alter table public.app_settings add column if not exists cloud_quota_gb int not null default 2048 check (cloud_quota_gb > 0);
+
+insert into storage.buckets (id, name, public) values ('user-files', 'user-files', false) on conflict do nothing;
+
+create or replace function public.cloud_quota_bytes()
+returns bigint language sql stable security definer set search_path = public as $$
+  select cloud_quota_gb::bigint * 1024 * 1024 * 1024 from public.app_settings where id = 1
+$$;
+
+create or replace function public.my_cloud_usage()
+returns bigint language sql stable security definer set search_path = public as $$
+  select coalesce(sum((o.metadata ->> 'size')::bigint), 0)::bigint
+  from storage.objects o
+  where o.bucket_id = 'user-files' and (storage.foldername(o.name))[1] = auth.uid()::text
+$$;
+
+create or replace function public.my_files()
+returns table (name text, size bigint, mimetype text, created_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select o.name, coalesce((o.metadata ->> 'size')::bigint, 0), o.metadata ->> 'mimetype', o.created_at
+  from storage.objects o
+  where auth.uid() is not null
+    and o.bucket_id = 'user-files' and (storage.foldername(o.name))[1] = auth.uid()::text
+  order by o.created_at desc
+$$;
+
+revoke execute on function public.my_cloud_usage() from public, anon;
+revoke execute on function public.my_files() from public, anon;
+grant execute on function public.my_cloud_usage() to authenticated;
+grant execute on function public.my_files() to authenticated;
+
+create policy "cloud: read own files" on storage.objects for select
+  using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "cloud: premium uploads within quota" on storage.objects for insert
+  with check (
+    bucket_id = 'user-files'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and public.has_active_subscription()
+    and public.my_cloud_usage() < public.cloud_quota_bytes()
+  );
+create policy "cloud: delete own files" on storage.objects for delete
+  using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);

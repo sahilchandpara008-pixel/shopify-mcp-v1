@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
@@ -378,6 +379,45 @@ fun LockedNote(text: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Icon(Icons.Default.Lock, null, tint = TextMuted, modifier = Modifier.size(14.dp))
         Text(text, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** Benefits every premium plan includes (shown on Profile above the plans, and on Cloud Storage). */
+val PremiumBenefits = listOf(
+    "Ad-Free Experience",
+    "Access 2 TB Cloud Storage",
+    "Fast Upload & Download Speed",
+)
+
+@Composable
+fun PremiumBenefitsCard(modifier: Modifier = Modifier, benefits: List<String> = PremiumBenefits) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(Brush.verticalGradient(listOf(Red.copy(alpha = 0.16f), Surface1)))
+            .border(1.dp, Red.copy(alpha = 0.35f), MaterialTheme.shapes.medium),
+    ) {
+        // thin red strip across the top, like the reference design
+        Box(Modifier.fillMaxWidth().height(4.dp).background(RedGradient))
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)) {
+            Row(
+                Modifier.clip(RoundedCornerShape(6.dp)).background(Red).padding(horizontal = 10.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.WorkspacePremium, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Premium", style = MaterialTheme.typography.labelLarge, color = Color.White)
+            }
+            Spacer(Modifier.height(10.dp))
+            benefits.forEach { b ->
+                Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Check, null, tint = Red, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(b, style = MaterialTheme.typography.bodyLarge, color = Color.White)
+                }
+            }
+        }
     }
 }
 

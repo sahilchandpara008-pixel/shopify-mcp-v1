@@ -99,7 +99,20 @@ data class Payment(
 data class PaymentSettings(
     @SerialName("upi_id") val upiId: String,
     @SerialName("payee_name") val payeeName: String,
+    @SerialName("cloud_quota_gb") val cloudQuotaGb: Int = 2048,
 )
+
+/** A file in the member's private Cloud Storage folder (user-files/<user id>/...). */
+@Serializable
+data class CloudFile(
+    val name: String,
+    val size: Long = 0,
+    val mimetype: String? = null,
+    @SerialName("created_at") val createdAt: String,
+) {
+    /** Display name without the folder and the upload-time prefix. */
+    val displayName: String get() = name.substringAfterLast('/').substringAfter("__")
+}
 
 @Serializable
 data class AdminEmail(val email: String, val role: String)

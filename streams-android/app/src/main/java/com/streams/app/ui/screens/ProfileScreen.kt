@@ -81,6 +81,7 @@ import com.streams.app.rememberLoad
 import com.streams.app.ui.components.Card
 import com.streams.app.ui.components.ErrorState
 import com.streams.app.ui.components.Loading
+import com.streams.app.ui.components.PremiumBenefitsCard
 import com.streams.app.ui.components.PrimaryButton
 import com.streams.app.ui.components.formatDate
 import com.streams.app.ui.components.formatPrice
@@ -156,6 +157,7 @@ fun ProfileScreen(nav: NavController) {
                     }
                 }
 
+                item { PremiumBenefitsCard() }
                 item {
                     Column {
                         Text("Choose your plan", style = MaterialTheme.typography.titleLarge)
