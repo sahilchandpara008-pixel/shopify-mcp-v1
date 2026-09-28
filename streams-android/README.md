@@ -95,7 +95,9 @@ Built-in protections (all enforced in the database, not in the app): the price a
 
 ## Step 8 — Test checklist
 
-- [ ] Fresh install → **Continue as guest** → browse Home/Channels/Shows → free titles play fully; premium titles show trailer / 30-sec preview then "See plans".
+- [ ] Fresh install → the app opens straight on **Home**; Home/Channels/Shows can be browsed without signing in.
+- [ ] Tap **Play** on anything while signed out → the sign-in screen appears; after signing in the video starts.
+- [ ] Signed in without a plan: free titles play fully; premium titles show trailer / 30-sec preview then "See plans".
 - [ ] **Continue with Google** works.
 - [ ] **Email me a sign-in link** → open link on the phone → signed in.
 - [ ] Admin: set password, sign in, create a channel, upload a free title and a premium title, turn them LIVE.

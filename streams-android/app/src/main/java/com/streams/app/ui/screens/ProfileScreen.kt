@@ -148,9 +148,8 @@ fun ProfileScreen(nav: NavController) {
                             onClick = {
                                 scope.launch {
                                     runCatching { Repo.signOut() }
-                                    AppState.setGuest(false)
                                     AppState.refreshAccess()
-                                    nav.navigate("auth") { popUpTo(nav.graph.id) { inclusive = true } }
+                                    nav.navigate("home") { popUpTo(nav.graph.id) { inclusive = true } }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -188,7 +187,7 @@ private fun AccountCard(email: String?, sub: Subscription?, nav: NavController) 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             if (email == null) {
-                Text("Guest", style = MaterialTheme.typography.titleMedium)
+                Text("Not signed in", style = MaterialTheme.typography.titleMedium)
                 Text("Sign in to subscribe and unlock premium.", style = MaterialTheme.typography.bodyMedium)
             } else {
                 Text(email, style = MaterialTheme.typography.titleMedium, maxLines = 1)

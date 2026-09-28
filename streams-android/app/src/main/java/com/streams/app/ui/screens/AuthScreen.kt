@@ -44,7 +44,7 @@ import com.streams.app.ui.theme.TextMuted
 import kotlinx.coroutines.launch
 
 @Composable
-fun AuthScreen(onGuest: () -> Unit) {
+fun AuthScreen(onClose: () -> Unit, reason: String = "Sign in to watch and to subscribe.") {
     val scope = rememberCoroutineScope()
     var email by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -62,7 +62,7 @@ fun AuthScreen(onGuest: () -> Unit) {
         Text("STREAMS", color = Red, fontSize = 36.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Movies, series and originals. Sign in to subscribe, or browse free titles as a guest.",
+            reason,
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
@@ -133,9 +133,9 @@ fun AuthScreen(onGuest: () -> Unit) {
         }
 
         Spacer(Modifier.height(32.dp))
-        TextButton(onClick = onGuest) { Text("Continue as guest", color = TextMuted) }
+        TextButton(onClick = onClose) { Text("Not now", color = TextMuted) }
         Text(
-            "Guests can watch free titles. Premium needs an account and a plan.",
+            "Free titles need a free account. Premium titles also need a plan.",
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,
         )

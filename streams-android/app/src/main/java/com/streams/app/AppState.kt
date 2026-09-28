@@ -16,12 +16,10 @@ import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-/** App-wide state: guest mode, subscription status, and a pending deep-link destination. */
+/** App-wide state: subscription status and a pending deep-link destination. */
 object AppState {
-    private const val PREFS = "streams"
     private lateinit var appContext: Context
 
-    val guest = MutableStateFlow(false)
     val hasSubscription = MutableStateFlow(false)
 
     /** Bumped whenever access may have changed (login/logout/approval) so screens reload. */
@@ -34,12 +32,6 @@ object AppState {
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        guest.value = prefs().getBoolean("guest", false)
-    }
-
-    fun setGuest(value: Boolean) {
-        guest.value = value
-        prefs().edit().putBoolean("guest", value).apply()
     }
 
     suspend fun refreshAccess() {
@@ -48,7 +40,6 @@ object AppState {
         accessVersion.value++
     }
 
-    private fun prefs() = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
 
 // ---------------------------------------------------------------- small loading helper

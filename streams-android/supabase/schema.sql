@@ -336,9 +336,9 @@ end $$;
 insert into storage.buckets (id, name, public) values ('images', 'images', true)  on conflict do nothing;
 insert into storage.buckets (id, name, public) values ('videos', 'videos', false) on conflict do nothing;
 
--- Who may stream a given file in the "videos" bucket?
---   trailers of visible titles ............ everyone
---   free title videos ..................... everyone
+-- Who may stream a given file in the "videos" bucket? (never guests)
+--   trailers of visible titles ............ any signed-in user
+--   free title videos ..................... any signed-in user
 --   premium videos ........................ subscribers; others only if the title has
 --                                           no trailer (the app stops at 30 seconds)
 --   hidden premium ........................ subscribers only (titles RLS hides it)
@@ -347,6 +347,8 @@ returns boolean language plpgsql stable security definer set search_path = publi
 declare t public.titles;
 begin
   if public.is_admin() then return true; end if;
+  -- Browsing is open to everyone, but watching anything needs an account.
+  if auth.uid() is null then return false; end if;
 
   select * into t from public.titles
    where published and (trailer_path = object_name or video_path = object_name)

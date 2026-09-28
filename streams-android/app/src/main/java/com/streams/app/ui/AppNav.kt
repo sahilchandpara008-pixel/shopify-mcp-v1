@@ -16,7 +16,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -68,7 +67,6 @@ object Routes {
 @Composable
 fun AppNav() {
     val session by AppState.session.collectAsStateWithLifecycle()
-    val guest by AppState.guest.collectAsStateWithLifecycle()
     val pendingRoute by AppState.pendingRoute.collectAsStateWithLifecycle()
 
     if (session is SessionStatus.Initializing) {
@@ -82,13 +80,12 @@ fun AppNav() {
     LaunchedEffect(userId) { AppState.refreshAccess() }
 
     val nav = rememberNavController()
-    val start = remember { if (signedIn || guest) "home" else "auth" }
 
-    // Leave the sign-in screen as soon as a session appears.
+    // Leave the sign-in screen (opened from Profile) as soon as a session appears.
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
     LaunchedEffect(signedIn, route) {
-        if (signedIn && route == "auth") nav.navigate("home") { popUpTo("auth") { inclusive = true } }
+        if (signedIn && route == "auth") nav.popBackStack()
     }
     LaunchedEffect(pendingRoute) {
         pendingRoute?.let { nav.navigate(it); AppState.pendingRoute.value = null }
@@ -101,15 +98,10 @@ fun AppNav() {
     ) { padding ->
         NavHost(
             navController = nav,
-            startDestination = start,
+            startDestination = "home",   // everyone can browse without signing in
             modifier = Modifier.padding(padding).consumeWindowInsets(padding),
         ) {
-            composable("auth") {
-                AuthScreen(onGuest = {
-                    AppState.setGuest(true)
-                    nav.navigate("home") { popUpTo("auth") { inclusive = true } }
-                })
-            }
+            composable("auth") { AuthScreen(onClose = { nav.popBackStack() }) }
             composable("home") { HomeScreen(nav) }
             composable("channels") { ChannelsScreen(nav) }
             composable("shows") { ShowsScreen(nav) }
@@ -123,6 +115,11 @@ fun AppNav() {
                     navArgument("ep") { type = NavType.StringType; nullable = true },
                 ),
             ) {
+                // Watching anything needs an account. Once sign-in finishes, the video starts here.
+                if (!signedIn) {
+                    AuthScreen(onClose = { nav.popBackStack() }, reason = "Sign in to start watching.")
+                    return@composable
+                }
                 PlayerScreen(
                     nav,
                     titleId = it.arguments?.getString("id")!!,
