@@ -103,7 +103,7 @@ Only owner/manager accounts can sign in; everyone else is signed straight back o
 4. The server finds the open order with exactly that amount and applies the plan: `new expiry = later of (now, current expiry) + plan length`. The customer's app flips to *Payment successful* — even if the UPI app never sends them back.
 5. The payment shows in **Admin → Payments → Approved** as *Auto · money received*. Admin → Settings lists the recent credits your phone has seen.
 
-**Setting up the checker phone (once).** Install the APK on the phone that receives your bank SMS / UPI alerts → sign in as owner → Admin → Settings → switch on *Auto-verify payments* → allow SMS and notification access. If Android says "restricted setting", open App info → ⋮ → *Allow restricted settings* first. Keep that phone online.
+**Setting up the checker phone (once).** Each build produces two APKs: **Streams** (for customers — no SMS/notification access, so Play Protect allows it) and **Streams Admin** (owner's phone only). Install *Streams Admin* on the phone that receives your bank SMS / UPI alerts — because it reads SMS, Play Protect blocks it when installed from WhatsApp/a browser, so first turn off Play Store → profile icon → Play Protect → ⚙ → *Scan apps with Play Protect*, install, then turn it back on. Sign in as owner → Admin → Settings → switch on *Auto-verify payments* → allow SMS and notification access. If Android says "restricted setting", open App info → ⋮ → *Allow restricted settings* first. Keep that phone online.
 
 **Manual fallback.** If no credit is matched (e.g. the customer changed the amount), they tap *Enter UTR*, and it waits in **Payments → Waiting** for you to Approve or Reject.
 

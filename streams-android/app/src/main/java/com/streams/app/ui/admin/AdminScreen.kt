@@ -577,7 +577,16 @@ private fun SettingsTab() {
                 Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                AutoVerifyCard()
+                if (com.streams.app.BuildConfig.AUTO_VERIFY) {
+                    AutoVerifyCard()
+                } else {
+                    Text(
+                        "Automatic payment activation needs the \"Streams Admin\" app on the phone that gets your " +
+                            "bank SMS / UPI alerts. Open Admin → Settings there and switch on Auto-verify.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Amber,
+                    )
+                }
                 Spacer(Modifier.size(8.dp))
                 Text("UPI payment details", style = MaterialTheme.typography.titleMedium)
                 Text("Customers pay to this UPI ID. Changes apply instantly.", style = MaterialTheme.typography.bodySmall)

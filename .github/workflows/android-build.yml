@@ -34,12 +34,19 @@ jobs:
           echo "SUPABASE_URL=$SUPABASE_URL" >> local.properties
           echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" >> local.properties
 
-      - name: Build debug APK
+      - name: Build debug APKs (customer + admin)
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleCustomerDebug assembleAdminDebug --stacktrace
 
+      # "Streams" — the app everyone installs.
       - uses: actions/upload-artifact@v4
         with:
           name: Streams-v1.1.${{ github.run_number }}
-          path: streams-android/app/build/outputs/apk/debug/app-debug.apk
+          path: streams-android/app/build/outputs/apk/customer/debug/app-customer-debug.apk
+
+      # "Streams Admin" — owner's phone only (Auto-verify payments).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Streams-Admin-v1.1.${{ github.run_number }}
+          path: streams-android/app/build/outputs/apk/admin/debug/app-admin-debug.apk

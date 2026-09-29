@@ -52,6 +52,24 @@ android {
         }
     }
 
+    // Two apps from one codebase:
+    //  • customer — "Streams", what everyone installs. No SMS / notification access, so Google
+    //    Play Protect lets it install from WhatsApp or a browser.
+    //  • admin    — "Streams Admin", only for the owner's phone. Same app plus Auto-verify
+    //    payments (reads the bank's "credited" SMS / UPI notifications). See src/admin/.
+    flavorDimensions += "role"
+    productFlavors {
+        create("customer") {
+            dimension = "role"
+            buildConfigField("boolean", "AUTO_VERIFY", "false")
+        }
+        create("admin") {
+            dimension = "role"
+            applicationIdSuffix = ".admin"
+            buildConfigField("boolean", "AUTO_VERIFY", "true")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
