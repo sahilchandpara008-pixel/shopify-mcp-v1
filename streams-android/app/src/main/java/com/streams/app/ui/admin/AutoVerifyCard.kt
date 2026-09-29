@@ -78,8 +78,8 @@ fun AutoVerifyCard() {
             Column(Modifier.weight(1f)) {
                 Text("Auto-verify payments on this phone", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Use the phone that gets the bank SMS / UPI app alerts for your UPI ID. Each customer order has a " +
-                        "unique amount (e.g. ₹149.37); when that credit arrives here, the plan starts automatically.",
+                    "Use the phone that gets the bank SMS / UPI app alerts for your UPI ID. When a payment for a " +
+                        "customer's order arrives here, their plan starts automatically.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

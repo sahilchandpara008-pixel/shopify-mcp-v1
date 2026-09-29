@@ -136,7 +136,7 @@ object Repo {
     /** My unfinished automatic order from the last hour, if any (so waiting survives an app restart). */
     suspend fun myOpenOrder(): Payment? {
         val uid = supabase.auth.currentUserOrNull()?.id ?: return null
-        val since = java.time.OffsetDateTime.now().minusMinutes(60).toString()
+        val since = java.time.OffsetDateTime.now().minusMinutes(20).toString()
         return supabase.from("payments").select {
             filter { eq("user_id", uid); eq("status", "initiated"); gt("created_at", since) }
             order("created_at", Order.DESCENDING)

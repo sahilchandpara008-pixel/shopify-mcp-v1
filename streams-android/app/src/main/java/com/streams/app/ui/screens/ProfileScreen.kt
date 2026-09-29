@@ -349,8 +349,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     var submitted by remember { mutableStateOf<Payment?>(null) }
     var activated by remember { mutableStateOf<Payment?>(null) }
     var showManual by remember { mutableStateOf(false) }
-    // The order created on the server just before the UPI app was opened. Its amount has a few
-    // unique paise so the incoming bank credit identifies it.
+    // The order created on the server just before the UPI app was opened (exact plan price);
+    // the incoming bank credit of that amount activates it.
     var order by remember { mutableStateOf<Payment?>(null) }
     LaunchedEffect(d.openOrder?.id) { if (order == null && activated == null) order = d.openOrder }
     val pending = submitted ?: d.payments.firstOrNull { it.status == "pending" }
@@ -367,7 +367,7 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                 p.status != "initiated" -> { order = null; busy = false; return@LaunchedEffect }
             }
             val age = runCatching { java.time.Duration.between(OffsetDateTime.parse(o.createdAt), OffsetDateTime.now()) }.getOrNull()
-            if (age != null && age.toMinutes() >= 60) {
+            if (age != null && age.toMinutes() >= 20) {
                 order = null
                 error = "We didn't receive this payment. If money was debited, enter the UTR below."
                 showManual = true
@@ -466,8 +466,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                     Text(formatPrice(plan.price), style = MaterialTheme.typography.headlineSmall)
                 }
                 Text(
-                    "Pay with Google Pay, PhonePe, Paytm or any UPI app. A few paise are added so we can recognise your " +
-                        "payment — your plan starts automatically within seconds, no UTR needed.",
+                    "Pay with Google Pay, PhonePe, Paytm or any UPI app. Your plan starts automatically within " +
+                        "seconds of the payment — no UTR needed.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 PrimaryButton(
@@ -555,8 +555,8 @@ private fun WaitingForPaymentCard(order: Payment, onPayAgain: () -> Unit, onEnte
                 Text(order.planName ?: "", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
             }
             Text(
-                "Pay exactly this amount in your UPI app. Your plan starts automatically within a few seconds of " +
-                    "the payment — after paying, just come back to Streams.",
+                "Complete the payment in your UPI app. Your plan starts automatically within a few seconds — " +
+                    "after paying, just come back to Streams.",
                 style = MaterialTheme.typography.bodySmall,
             )
             PrimaryButton("Open UPI app", onPayAgain)

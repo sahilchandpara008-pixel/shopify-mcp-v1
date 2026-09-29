@@ -97,10 +97,10 @@ Only owner/manager accounts can sign in; everyone else is signed straight back o
 ## How payments work
 
 **Automatic (default).**
-1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order with a **unique amount** — plan price + 1–99 paise (e.g. ₹149.37), valid 60 minutes.
+1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order for **exactly the plan price**, open for 20 minutes.
 2. Their UPI app (GPay, PhonePe, Paytm…) opens with that exact amount; the note carries the order number (`Streams STR…`). The app shows *Waiting for your payment* and checks the order every 3 seconds.
 3. The money reaches your account. **Your phone** (Streams app, signed in as owner, *Admin → Settings → Auto-verify payments* switched on) reads the bank's "credited" SMS and/or the UPI app's "received" notification and sends the amount + UTR to `record_bank_credit`.
-4. The server finds the open order with exactly that amount and applies the plan: `new expiry = later of (now, current expiry) + plan length`. The customer's app flips to *Payment successful* — even if the UPI app never sends them back.
+4. The server finds the most recent open order for that amount and applies the plan (if two customers buy the same plan within minutes, each credit activates one of them and the credit is flagged so you can double-check): `new expiry = later of (now, current expiry) + plan length`. The customer's app flips to *Payment successful* — even if the UPI app never sends them back.
 5. The payment shows in **Admin → Payments → Approved** as *Auto · money received*. Admin → Settings lists the recent credits your phone has seen.
 
 **Setting up the checker phone (once).** Each build produces two APKs: **Streams** (for customers — no SMS/notification access, so Play Protect allows it) and **Streams Admin** (owner's phone only). Install *Streams Admin* on the phone that receives your bank SMS / UPI alerts — because it reads SMS, Play Protect blocks it when installed from WhatsApp/a browser, so first turn off Play Store → profile icon → Play Protect → ⚙ → *Scan apps with Play Protect*, install, then turn it back on. Sign in as owner → Admin → Settings → switch on *Auto-verify payments* → allow SMS and notification access. If Android says "restricted setting", open App info → ⋮ → *Allow restricted settings* first. Keep that phone online.

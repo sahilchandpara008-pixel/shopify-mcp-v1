@@ -875,3 +875,124 @@ end $$;
 
 revoke execute on function public.record_bank_credit(numeric, text, text, text) from public, anon;
 grant execute on function public.record_bank_credit(numeric, text, text, text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 17. EXACT PLAN PRICE (no extra paise). Orders are charged exactly the plan
+--     price; an incoming credit activates the most recent open order with that
+--     amount from the last 20 minutes. If two customers buy the same plan in the
+--     same few minutes, each credit activates one of them (the credit is marked
+--     ambiguous so the owner can double-check); anyone left waiting can still
+--     submit their UTR.
+-- ---------------------------------------------------------------------
+alter table public.bank_credits add column if not exists ambiguous boolean not null default false;
+
+create or replace function public.start_upi_payment(p_plan_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare r public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  delete from public.payments where user_id = auth.uid() and status = 'initiated';
+  insert into public.payments (plan_id, reference, status)
+  values (p_plan_id, 'STR' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 14)), 'initiated')
+  returning * into r;   -- amount = plan price (set by payments_before_insert)
+  return r;
+end $$;
+
+create or replace function public.record_bank_credit(p_amount numeric, p_ref text, p_source text, p_raw text)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  c     public.bank_credits;
+  pay   public.payments;
+  v_ref text := nullif(upper(regexp_replace(coalesce(p_ref, ''), '\s', '', 'g')), '');
+  amt   numeric(10,2) := round(p_amount, 2);
+  open_count int;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  if amt is null or amt <= 0 then raise exception 'Bad amount'; end if;
+
+  -- The same credit often arrives twice (bank SMS + UPI app notification).
+  select * into c from public.bank_credits
+   where (v_ref is not null and bank_credits.ref = v_ref)
+      -- same money reported once by SMS and once by an app notification (never two SMS / two alerts)
+      or (bank_credits.amount = amt and bank_credits.received_at > now() - interval '3 minutes'
+          and (v_ref is null or bank_credits.ref is null)
+          and split_part(bank_credits.source, ':', 1) <> split_part(coalesce(p_source, ''), ':', 1))
+   order by received_at desc limit 1 for update;
+  if found then
+    if c.ref is null and v_ref is not null then
+      update public.bank_credits set ref = v_ref where id = c.id returning * into c;
+      update public.payments set txn_id = coalesce(txn_id, v_ref) where id = c.payment_id
+        and not exists (select 1 from public.payments p2 where upper(p2.txn_id) = v_ref);
+    end if;
+    return json_build_object('duplicate', true, 'payment_id', c.payment_id);
+  end if;
+
+  select count(*) into open_count from public.payments
+   where status = 'initiated' and amount = amt and created_at > now() - interval '20 minutes';
+
+  insert into public.bank_credits (amount, ref, source, raw, reported_by, ambiguous)
+  values (amt, v_ref, left(p_source, 80), left(p_raw, 500), auth.jwt() ->> 'email', open_count > 1)
+  returning * into c;
+
+  update public.payments
+     set status = 'approved', method = 'upi_auto', bank_credit_id = c.id,
+         txn_id = case when v_ref is not null and not exists (select 1 from public.payments p2 where upper(p2.txn_id) = v_ref) then v_ref end,
+         reviewed_at = now(), reviewed_by = 'auto (bank credit)'
+   where id = (select id from public.payments
+                where status = 'initiated' and amount = amt and created_at > now() - interval '20 minutes'
+                order by created_at desc limit 1 for update skip locked)
+  returning * into pay;
+  if found then
+    perform public.grant_plan_for_payment(pay);
+  else
+    -- Already activated from the UPI app's own response? Mark it bank-verified.
+    update public.payments set bank_credit_id = c.id
+     where id = (select id from public.payments
+                  where status = 'approved' and method = 'upi_auto' and bank_credit_id is null
+                    and amount = amt and created_at > now() - interval '60 minutes'
+                  order by created_at desc limit 1)
+    returning * into pay;
+  end if;
+  if pay.id is not null then update public.bank_credits set payment_id = pay.id where id = c.id; end if;
+  return json_build_object('duplicate', false, 'payment_id', pay.id, 'plan', pay.plan_name,
+                           'email', pay.user_email, 'ambiguous', open_count > 1);
+end $$;
+
+-- Orders stay open 20 minutes (matches the bank-credit window).
+create or replace function public.confirm_upi_payment(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  kv     text;
+  f      jsonb := '{}';
+  st     text;
+  txn    text;
+  pay    public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if coalesce(length(p_response), 0) = 0 or length(p_response) > 2000 then
+    raise exception 'No response from the UPI app';
+  end if;
+  foreach kv in array string_to_array(p_response, '&') loop
+    if position('=' in kv) > 0 then
+      f := f || jsonb_build_object(lower(trim(split_part(kv, '=', 1))), trim(substr(kv, position('=' in kv) + 1)));
+    end if;
+  end loop;
+  st := lower(coalesce(f ->> 'status', ''));
+  if st <> 'success' then
+    raise exception 'The UPI app did not report a successful payment (status: %)', coalesce(nullif(st, ''), 'unknown');
+  end if;
+  txn := upper(regexp_replace(coalesce(nullif(f ->> 'approvalrefno', ''), nullif(f ->> 'txnid', ''), ''), '\s', '', 'g'));
+  if txn !~ '^[A-Z0-9]{6,40}$' then raise exception 'The UPI app did not return a transaction ID'; end if;
+  if exists (select 1 from public.payments where upper(txn_id) = txn or reference = txn) then
+    raise exception 'This transaction has already been used';
+  end if;
+  update public.payments
+     set status = 'approved', method = 'upi_auto', txn_id = txn, upi_response = left(p_response, 2000),
+         reviewed_at = now(), reviewed_by = 'auto (UPI app)'
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+     and created_at > now() - interval '20 minutes'
+  returning * into pay;
+  if not found then raise exception 'This payment has expired or was already processed. Please start again.'; end if;
+  perform public.grant_plan_for_payment(pay);
+  return pay;
+end $$;
