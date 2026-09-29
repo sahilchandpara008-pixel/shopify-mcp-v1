@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,6 +90,8 @@ private data class DetailData(val title: Title, val episodes: List<Episode>, val
 fun TitleDetailScreen(nav: NavController, titleId: String) {
     val access by AppState.accessVersion.collectAsStateWithLifecycle()
     val hasSub by AppState.hasSubscription.collectAsStateWithLifecycle()
+    // Make sure the Subscribe / Play buttons reflect the latest plan status.
+    LaunchedEffect(titleId) { AppState.refreshAccess(onlyIfChanged = true) }
     val load = rememberLoad(titleId, access) {
         coroutineScope {
             val t = Repo.title(titleId) ?: error("This title isn't available.")

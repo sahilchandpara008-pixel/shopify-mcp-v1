@@ -29,7 +29,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -91,6 +94,12 @@ fun AppNav() {
     // Re-check subscription whenever the signed-in user changes.
     val userId = (session as? SessionStatus.Authenticated)?.session?.user?.id
     LaunchedEffect(userId) { AppState.refreshAccess() }
+    // ...and every time the app comes back to the foreground (e.g. after paying, or once
+    // an admin approved the payment), so Premium unlocks without restarting the app.
+    LifecycleResumeEffect(userId) {
+        val job = lifecycleScope.launch { AppState.refreshAccess(onlyIfChanged = true) }
+        onPauseOrDispose { job.cancel() }
+    }
 
     val nav = rememberNavController()
 

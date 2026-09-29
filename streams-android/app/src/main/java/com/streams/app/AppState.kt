@@ -37,10 +37,22 @@ object AppState {
         appContext = context.applicationContext
     }
 
-    suspend fun refreshAccess() {
-        hasSubscription.value =
-            supabase.auth.currentUserOrNull() != null && runCatching { Repo.hasActiveSubscription() }.getOrDefault(false)
-        accessVersion.value++
+    /**
+     * Re-checks whether the signed-in user may watch Premium (an active plan, or an
+     * owner/manager account). With [onlyIfChanged] screens reload only when the answer
+     * changed — used on app resume and when a title opens, so a plan approved while the
+     * app was open unlocks without a restart. A network error keeps the last known answer.
+     */
+    suspend fun refreshAccess(onlyIfChanged: Boolean = false) {
+        val now = if (supabase.auth.currentUserOrNull() == null) {
+            false
+        } else {
+            runCatching { Repo.hasActiveSubscription() || Repo.myAdminRole() != null }
+                .getOrElse { if (onlyIfChanged) return else hasSubscription.value }
+        }
+        val changed = now != hasSubscription.value
+        hasSubscription.value = now
+        if (changed || !onlyIfChanged) accessVersion.value++
     }
 
 }
