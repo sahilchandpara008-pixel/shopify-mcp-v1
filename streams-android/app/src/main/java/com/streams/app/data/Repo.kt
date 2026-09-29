@@ -129,6 +129,34 @@ object Repo {
     suspend fun startUpiPayment(planId: String): Payment =
         supabase.postgrest.rpc("start_upi_payment", buildJsonObject { put("p_plan_id", planId) }).decodeAs()
 
+    /** Re-read one of my orders (the app polls it while waiting for the payment to arrive). */
+    suspend fun payment(id: String): Payment? =
+        supabase.from("payments").select { filter { eq("id", id) } }.decodeList<Payment>().firstOrNull()
+
+    /** My unfinished automatic order from the last hour, if any (so waiting survives an app restart). */
+    suspend fun myOpenOrder(): Payment? {
+        val uid = supabase.auth.currentUserOrNull()?.id ?: return null
+        val since = java.time.OffsetDateTime.now().minusMinutes(60).toString()
+        return supabase.from("payments").select {
+            filter { eq("user_id", uid); eq("status", "initiated"); gt("created_at", since) }
+            order("created_at", Order.DESCENDING)
+            limit(1)
+        }.decodeList<Payment>().firstOrNull()
+    }
+
+    /** Owner's phone: a "credited" SMS/notification arrived — the server activates the matching order. */
+    suspend fun recordBankCredit(amount: Double, ref: String?, source: String, raw: String) {
+        supabase.postgrest.rpc("record_bank_credit", buildJsonObject {
+            put("p_amount", amount); put("p_ref", ref); put("p_source", source); put("p_raw", raw)
+        })
+    }
+
+    suspend fun recentBankCredits(): List<BankCredit> =
+        supabase.from("bank_credits").select {
+            order("received_at", Order.DESCENDING)
+            limit(8)
+        }.decodeList()
+
     /** Step 2: forward the UPI app's response; on Status=SUCCESS the plan is applied immediately. */
     suspend fun confirmUpiPayment(paymentId: String, response: String): Payment =
         supabase.postgrest.rpc("confirm_upi_payment", buildJsonObject {

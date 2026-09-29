@@ -51,6 +51,10 @@ fun Throwable.friendly(): String {
         "Please sign in first",
         "Invalid login credentials",
         "Not allowed",
+        "This payment has expired",
+        "The UPI app did not",
+        "This transaction has already been used",
+        "Too many payments in progress",
     )
     known.firstOrNull { raw.contains(it) }?.let { k ->
         return raw.substring(raw.indexOf(k)).lineSequence().first()

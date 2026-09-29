@@ -86,6 +86,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    implementation("androidx.work:work-runtime-ktx:2.10.1") // uploads detected payments reliably
 
     // Supabase (auth, database, file storage)
     implementation(platform("io.github.jan-tennert.supabase:bom:3.2.6"))

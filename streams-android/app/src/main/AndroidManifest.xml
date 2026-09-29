@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Admin "Auto-verify payments": read the bank's "credited" SMS on the owner's phone.
+         Only requested when an admin switches the feature on. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
     <!-- Lets the app see which UPI apps are installed (Android 11+). -->
     <queries>
@@ -39,5 +42,24 @@
                 <data android:scheme="streams" android:host="login-callback" />
             </intent-filter>
         </activity>
+
+        <!-- Auto-verify payments (owner's phone only; does nothing until switched on). -->
+        <receiver
+            android:name=".payments.PaymentSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".payments.PaymentNotificationListener"
+            android:exported="true"
+            android:label="Streams payment auto-verify"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

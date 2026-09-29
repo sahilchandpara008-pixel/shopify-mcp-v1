@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -103,6 +104,7 @@ import com.streams.app.ui.theme.TextFaint
 import com.streams.app.ui.theme.TextMuted
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 
@@ -113,6 +115,8 @@ private data class ProfileData(
     val payments: List<Payment>,
     val settings: PaymentSettings?,
     val adminRole: String?,
+    /** An automatic UPI order still waiting for its payment (survives leaving the app). */
+    val openOrder: Payment? = null,
 )
 
 @Composable
@@ -128,7 +132,8 @@ fun ProfileScreen(nav: NavController) {
             val settings = async { runCatching { Repo.paymentSettings() }.getOrNull() }
             // Only owner/manager accounts get a role back; everyone else gets null.
             val role = async { if (email != null) runCatching { Repo.myAdminRole() }.getOrNull() else null }
-            ProfileData(email, sub.await(), plans.await(), pays.await(), settings.await(), role.await())
+            val open = async { if (email != null) runCatching { Repo.myOpenOrder() }.getOrNull() else null }
+            ProfileData(email, sub.await(), plans.await(), pays.await(), settings.await(), role.await(), open.await())
         }
     }
     var versionTaps by remember { mutableIntStateOf(0) }
@@ -344,26 +349,51 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     var submitted by remember { mutableStateOf<Payment?>(null) }
     var activated by remember { mutableStateOf<Payment?>(null) }
     var showManual by remember { mutableStateOf(false) }
-    // The order created on the server just before the UPI app was opened.
+    // The order created on the server just before the UPI app was opened. Its amount has a few
+    // unique paise so the incoming bank credit identifies it.
     var order by remember { mutableStateOf<Payment?>(null) }
+    LaunchedEffect(d.openOrder?.id) { if (order == null && activated == null) order = d.openOrder }
     val pending = submitted ?: d.payments.firstOrNull { it.status == "pending" }
 
-    // The UPI app returns "txnId=..&Status=SUCCESS&ApprovalRefNo=.." — the server checks it
-    // and applies the plan straight away.
-    val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val o = order ?: return@rememberLauncherForActivityResult
-        val response = upiResponse(result.data)
-        if (response == null) {
-            busy = false
-            error = "Payment was not completed. If money was debited, enter the UTR below."
-            showManual = true
-            return@rememberLauncherForActivityResult
+    // Most UPI apps don't report back for payments to a UPI ID, so we don't rely on that:
+    // the server activates the order when the money arrives, and we check it every 3 seconds.
+    LaunchedEffect(order?.id) {
+        val o = order ?: return@LaunchedEffect
+        while (true) {
+            val p = runCatching { Repo.payment(o.id) }.getOrNull()
+            when {
+                p == null -> Unit
+                p.status == "approved" -> { activated = p; order = null; busy = false; onSubmitted(); return@LaunchedEffect }
+                p.status != "initiated" -> { order = null; busy = false; return@LaunchedEffect }
+            }
+            val age = runCatching { java.time.Duration.between(OffsetDateTime.parse(o.createdAt), OffsetDateTime.now()) }.getOrNull()
+            if (age != null && age.toMinutes() >= 60) {
+                order = null
+                error = "We didn't receive this payment. If money was debited, enter the UTR below."
+                showManual = true
+                return@LaunchedEffect
+            }
+            delay(3000)
         }
+    }
+
+    // A few UPI apps do return "Status=SUCCESS&txnId=.." — use it as a shortcut when present.
+    val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        busy = false
+        val o = order ?: return@rememberLauncherForActivityResult
+        val response = upiResponse(result.data) ?: return@rememberLauncherForActivityResult
+        if (!response.contains("status=success", ignoreCase = true)) return@rememberLauncherForActivityResult
         scope.launch {
             runCatching { Repo.confirmUpiPayment(o.id, response) }
                 .onSuccess { activated = it; order = null; onSubmitted() }
-                .onFailure { error = it.friendly() + "\nIf money was debited, enter the UTR below."; showManual = true }
+        }
+    }
+    fun openUpiApp(settings: PaymentSettings, o: Payment) {
+        try {
+            upiLauncher.launch(Intent.createChooser(upiIntent(settings, o), "Pay with"))
+        } catch (_: ActivityNotFoundException) {
             busy = false
+            error = "No UPI app found on this phone."
         }
     }
 
@@ -403,6 +433,16 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             return@Column
         }
 
+        val waiting = order
+        if (waiting != null && d.settings != null) {
+            WaitingForPaymentCard(
+                waiting,
+                onPayAgain = { openUpiApp(d.settings, waiting) },
+                onEnterUtr = { order = null; showManual = true; selected = d.plans.firstOrNull { it.id == waiting.planId } ?: selected },
+            )
+            return@Column
+        }
+
         d.plans.forEach { plan ->
             PlanCard(plan, selected?.id == plan.id, plan.id == popularId) { selected = plan; error = null }
         }
@@ -426,7 +466,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                     Text(formatPrice(plan.price), style = MaterialTheme.typography.headlineSmall)
                 }
                 Text(
-                    "Pay with Google Pay, PhonePe, Paytm or any UPI app. Your plan starts automatically as soon as the payment succeeds.",
+                    "Pay with Google Pay, PhonePe, Paytm or any UPI app. A few paise are added so we can recognise your " +
+                        "payment — your plan starts automatically within seconds, no UTR needed.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 PrimaryButton(
@@ -435,15 +476,7 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                         busy = true; error = null
                         scope.launch {
                             runCatching { Repo.startUpiPayment(plan.id) }
-                                .onSuccess { o ->
-                                    order = o
-                                    try {
-                                        upiLauncher.launch(Intent.createChooser(upiIntent(settings, plan, o.reference), "Pay with"))
-                                    } catch (_: ActivityNotFoundException) {
-                                        busy = false
-                                        error = "No UPI app found on this phone."
-                                    }
-                                }
+                                .onSuccess { o -> order = o; openUpiApp(settings, o) }
                                 .onFailure { busy = false; error = it.friendly() }
                         }
                     },
@@ -503,6 +536,36 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun WaitingForPaymentCard(order: Payment, onPayAgain: () -> Unit, onEnterUtr: () -> Unit) {
+    Card(padding = 18.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(22.dp), color = Red, strokeWidth = 2.5.dp)
+                Spacer(Modifier.width(12.dp))
+                Text("Waiting for your payment", style = MaterialTheme.typography.titleMedium)
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(formatPrice(order.amount), fontFamily = Poppins, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text(order.planName ?: "", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+            }
+            Text(
+                "Pay exactly this amount in your UPI app. Your plan starts automatically within a few seconds of " +
+                    "the payment — after paying, just come back to Streams.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            PrimaryButton("Open UPI app", onPayAgain)
+            Text(
+                "Paid more than 10 minutes ago and still waiting? Enter UTR",
+                style = MaterialTheme.typography.labelLarge,
+                color = TextMuted,
+                modifier = Modifier.clickable(onClick = onEnterUtr).padding(vertical = 4.dp),
+            )
         }
     }
 }
@@ -582,15 +645,15 @@ private fun PaymentRow(p: Payment) {
     }
 }
 
-/** upi://pay?... pre-filled with the plan price; the note carries our order reference. */
-private fun upiIntent(s: PaymentSettings, plan: Plan, reference: String): Intent {
+/** upi://pay?... pre-filled with the order's exact amount; the note carries our order reference. */
+private fun upiIntent(s: PaymentSettings, order: Payment): Intent {
     val uri = Uri.Builder()
         .scheme("upi").authority("pay")
         .appendQueryParameter("pa", s.upiId)
         .appendQueryParameter("pn", s.payeeName)
-        .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, plan.price))
+        .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, order.amount ?: 0.0))
         .appendQueryParameter("cu", "INR")
-        .appendQueryParameter("tn", "Streams $reference")
+        .appendQueryParameter("tn", "Streams ${order.reference}")
         .build()
     return Intent(Intent.ACTION_VIEW, uri)
 }

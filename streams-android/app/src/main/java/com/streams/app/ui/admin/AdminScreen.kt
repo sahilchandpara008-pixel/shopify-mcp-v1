@@ -3,6 +3,8 @@ package com.streams.app.ui.admin
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -231,8 +233,10 @@ private fun PaymentsTab() {
                         Text("UTR: ${p.utr}", style = MaterialTheme.typography.titleSmall, color = Amber, modifier = Modifier.padding(top = 4.dp))
                         if (p.isAuto) {
                             Text(
-                                "Auto-confirmed by UPI app · order ${p.reference} — check this UTR in your bank",
+                                if (p.bankVerified) "Auto · money received (bank alert matched) · order ${p.reference}"
+                                else "Auto · confirmed by the UPI app, not yet seen in bank · order ${p.reference}",
                                 style = MaterialTheme.typography.bodySmall,
+                                color = if (p.bankVerified) Green else Amber,
                             )
                         }
                         if (p.status == "rejected" || p.status == "revoked") p.adminNote?.let { Text("Note: $it", style = MaterialTheme.typography.bodySmall) }
@@ -569,7 +573,12 @@ private fun SettingsTab() {
             var upi by remember { mutableStateOf(s.data.upiId) }
             var payee by remember { mutableStateOf(s.data.payeeName) }
             var busy by remember { mutableStateOf(false) }
-            Column(Modifier.padding(16.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                AutoVerifyCard()
+                Spacer(Modifier.size(8.dp))
                 Text("UPI payment details", style = MaterialTheme.typography.titleMedium)
                 Text("Customers pay to this UPI ID. Changes apply instantly.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(upi, { upi = it.trim() }, label = { Text("UPI ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())

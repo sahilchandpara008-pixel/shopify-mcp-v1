@@ -98,11 +98,25 @@ data class Payment(
     val method: String = "manual",
     @SerialName("txn_id") val txnId: String? = null,
     @SerialName("reviewed_by") val reviewedBy: String? = null,
+    /** Set when the money was seen arriving (bank SMS / UPI app notification on the owner's phone). */
+    @SerialName("bank_credit_id") val bankCreditId: String? = null,
 ) {
     val isAuto get() = method == "upi_auto"
+    val bankVerified get() = bankCreditId != null
     /** The number to look for in the bank statement. */
     val utr get() = txnId ?: reference
 }
+
+/** A credit seen on the owner's phone (Admin → Settings → Auto-verify). */
+@Serializable
+data class BankCredit(
+    val id: String,
+    val amount: Double,
+    val ref: String? = null,
+    val source: String? = null,
+    @SerialName("payment_id") val paymentId: String? = null,
+    @SerialName("received_at") val receivedAt: String,
+)
 
 @Serializable
 data class PaymentSettings(

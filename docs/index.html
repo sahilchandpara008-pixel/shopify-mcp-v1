@@ -363,7 +363,7 @@ async function Payments(main) {
         <div class="row"><span class="title">${esc(p.user_email || "—")}</span><span class="spacer"></span><b>${rupees(p.amount)}</b></div>
         <div class="muted small">${esc(p.plan_name)} · ${when(p.created_at)}</div>
         <div class="utr">UTR: ${esc(utr)}</div>
-        ${auto ? `<div class="small muted">Auto · confirmed by the UPI app · order ${esc(p.reference)}</div>` : ""}
+        ${auto ? `<div class="small" style="color:${p.bank_credit_id ? "var(--green)" : "var(--amber)"}">Auto · ${p.bank_credit_id ? "money received (bank alert matched)" : "confirmed by the UPI app, not yet seen in bank"} · order ${esc(p.reference)}</div>` : ""}
         ${(p.status === "rejected" || p.status === "revoked") && p.admin_note ? `<div class="small muted">Note: ${esc(p.admin_note)}</div>` : ""}
         ${p.status !== "pending" ? `<div class="small" style="color:${statusColor}">${esc(p.status[0].toUpperCase() + p.status.slice(1))}${p.reviewed_by ? " by " + esc(p.reviewed_by) : ""}</div>` : ""}
       </div>

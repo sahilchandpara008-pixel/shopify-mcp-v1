@@ -97,14 +97,17 @@ Only owner/manager accounts can sign in; everyone else is signed straight back o
 ## How payments work
 
 **Automatic (default).**
-1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order at the plan's real price.
-2. Their UPI app (GPay, PhonePe, Paytm…) opens with the amount filled in; the note carries the order number (`Streams STR…`).
-3. When they return, the UPI app's response (`Status=SUCCESS`, transaction ID / UTR) is sent to `confirm_upi_payment`, which applies the plan **immediately**: `new expiry = later of (now, current expiry) + plan days`.
-4. The payment shows in **Admin → Payments → Approved** marked *Auto*. Match its UTR in your bank statement; if the money never arrived, tap **Revoke** — the plan's days are taken back.
+1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order with a **unique amount** — plan price + 1–99 paise (e.g. ₹149.37), valid 60 minutes.
+2. Their UPI app (GPay, PhonePe, Paytm…) opens with that exact amount; the note carries the order number (`Streams STR…`). The app shows *Waiting for your payment* and checks the order every 3 seconds.
+3. The money reaches your account. **Your phone** (Streams app, signed in as owner, *Admin → Settings → Auto-verify payments* switched on) reads the bank's "credited" SMS and/or the UPI app's "received" notification and sends the amount + UTR to `record_bank_credit`.
+4. The server finds the open order with exactly that amount and applies the plan: `new expiry = later of (now, current expiry) + plan length`. The customer's app flips to *Payment successful* — even if the UPI app never sends them back.
+5. The payment shows in **Admin → Payments → Approved** as *Auto · money received*. Admin → Settings lists the recent credits your phone has seen.
 
-**Manual fallback.** If the UPI app doesn't report back, the customer taps *Paid but plan not active? Enter UTR*, types the UTR, and it waits in **Payments → Waiting** for you to Approve or Reject.
+**Setting up the checker phone (once).** Install the APK on the phone that receives your bank SMS / UPI alerts → sign in as owner → Admin → Settings → switch on *Auto-verify payments* → allow SMS and notification access. If Android says "restricted setting", open App info → ⋮ → *Allow restricted settings* first. Keep that phone online.
 
-> ⚠️ Without a payment gateway the "success" message comes from the customer's phone and can't be proven genuine, which is why auto payments stay revocable. Some UPI apps also block app-initiated payments to personal UPI IDs — customers then use the manual fallback. A gateway (Razorpay/Cashfree) removes both limits.
+**Manual fallback.** If no credit is matched (e.g. the customer changed the amount), they tap *Enter UTR*, and it waits in **Payments → Waiting** for you to Approve or Reject.
+
+> Only SMS from bank sender IDs (letters, not phone numbers) and notifications from GPay / PhonePe / Paytm / BHIM / Bandhan apps are read, and only while the switch is on.
 
 Built-in protections (all enforced in the database, not in the app): the price always comes from the plans table; a customer can only create *pending*/*initiated* payments for themselves; an auto confirmation needs a SUCCESS status, must arrive within 30 minutes of the order, and each transaction ID works once; one pending payment per customer; a UTR can only be used once; only owner/manager accounts can approve; a double-tap cannot approve twice; customers can never write to their own subscription.
 
