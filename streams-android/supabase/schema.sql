@@ -657,3 +657,64 @@ begin
   insert into public.payments (plan_id, reference) values (p_plan_id, p_reference) returning * into r;
   return r;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- 15. HOURLY PLANS — a plan lasts duration_days + duration_hours.
+-- ---------------------------------------------------------------------
+alter table public.subscription_plans add column if not exists duration_hours int not null default 0;
+alter table public.subscription_plans drop constraint if exists subscription_plans_duration_days_check;
+alter table public.subscription_plans drop constraint if exists subscription_plans_duration_check;
+alter table public.subscription_plans add constraint subscription_plans_duration_check
+  check (duration_days >= 0 and duration_hours >= 0 and (duration_days > 0 or duration_hours > 0));
+
+insert into public.subscription_plans (name, duration_label, duration_days, duration_hours, price, sort_order)
+select '1 Hour Pass', '1 Hour', 0, 1, 1, 0
+where not exists (select 1 from public.subscription_plans where name = '1 Hour Pass');
+
+create or replace function public.plan_interval(plan public.subscription_plans)
+returns interval language sql immutable as $$
+  select make_interval(days => plan.duration_days, hours => plan.duration_hours)
+$$;
+
+-- new_expiry = max(now, current active expiry) + plan length (keeps unused time)
+create or replace function public.grant_plan_for_payment(pay public.payments)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  plan public.subscription_plans;
+  cur  public.subscriptions;
+  base timestamptz;
+begin
+  select * into plan from public.subscription_plans where id = pay.plan_id;
+  select * into cur  from public.subscriptions where user_id = pay.user_id for update;
+  base := greatest(now(), coalesce(case when cur.status = 'active' then cur.expires_at end, now()));
+  insert into public.subscriptions (user_id, user_email, plan_id, status, expires_at, updated_at)
+  values (pay.user_id, pay.user_email, pay.plan_id, 'active', base + public.plan_interval(plan), now())
+  on conflict (user_id) do update
+     set plan_id = excluded.plan_id, user_email = excluded.user_email, status = 'active',
+         expires_at = excluded.expires_at, updated_at = now();
+end $$;
+
+create or replace function public.revoke_payment(p_payment_id uuid, p_note text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  pay  public.payments;
+  plan public.subscription_plans;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  if coalesce(length(trim(p_note)), 0) < 3 then raise exception 'Please type a short reason'; end if;
+  update public.payments
+     set status = 'revoked', admin_note = trim(p_note), reviewed_at = now(), reviewed_by = auth.jwt() ->> 'email'
+   where id = p_payment_id and status = 'approved'
+  returning * into pay;
+  if not found then raise exception 'Only approved payments can be revoked'; end if;
+  select * into plan from public.subscription_plans where id = pay.plan_id;
+  update public.subscriptions
+     set expires_at = expires_at - public.plan_interval(plan), updated_at = now()
+   where user_id = pay.user_id;
+  update public.subscriptions
+     set status = 'expired', updated_at = now()
+   where user_id = pay.user_id and status = 'active' and expires_at <= now();
+  return pay;
+end $$;
+
+revoke execute on function public.grant_plan_for_payment(public.payments) from public, anon, authenticated;

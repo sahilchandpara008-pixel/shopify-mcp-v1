@@ -67,6 +67,7 @@ data class Plan(
     val name: String,
     @SerialName("duration_label") val durationLabel: String,
     @SerialName("duration_days") val durationDays: Int,
+    @SerialName("duration_hours") val durationHours: Int = 0,
     val price: Double,
     val currency: String = "INR",
     val active: Boolean = true,

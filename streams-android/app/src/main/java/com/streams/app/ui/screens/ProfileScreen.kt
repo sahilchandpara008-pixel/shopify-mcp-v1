@@ -237,7 +237,13 @@ fun ProfileScreen(nav: NavController) {
 private fun MembershipCard(email: String?, sub: Subscription?, nav: NavController) {
     val expires = sub?.expiresAt?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() }
     val active = sub?.status == "active" && expires?.isAfter(OffsetDateTime.now()) == true
-    val daysLeft = if (active && expires != null) java.time.Duration.between(OffsetDateTime.now(), expires).toDays() else 0
+    val left = if (active && expires != null) java.time.Duration.between(OffsetDateTime.now(), expires) else java.time.Duration.ZERO
+    // "12 days left", or for short plans "1 hour left" / "25 minutes left".
+    val (leftValue, leftUnit) = when {
+        left.toDays() >= 1 -> left.toDays() to "day"
+        left.toHours() >= 1 -> left.toHours() to "hour"
+        else -> maxOf(1L, left.toMinutes()) to "minute"
+    }
     Box(
         Modifier
             .fillMaxWidth()
@@ -283,9 +289,13 @@ private fun MembershipCard(email: String?, sub: Subscription?, nav: NavControlle
                 active -> {
                     Spacer(Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
-                        Text("$daysLeft", fontFamily = Poppins, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = Color.White)
+                        Text("$leftValue", fontFamily = Poppins, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = Color.White)
                         Spacer(Modifier.width(6.dp))
-                        Text(if (daysLeft == 1L) "day left" else "days left", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 5.dp))
+                        Text(
+                            if (leftValue == 1L) "$leftUnit left" else "${leftUnit}s left",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 5.dp),
+                        )
                     }
                     Text("Valid until ${formatDate(sub!!.expiresAt)}", style = MaterialTheme.typography.bodySmall)
                 }

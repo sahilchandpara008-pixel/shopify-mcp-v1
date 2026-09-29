@@ -26,7 +26,7 @@ streams-android/
 2. Open `supabase/schema.sql` in any text editor. Near the bottom, replace
    `YOUR_OWNER_EMAIL@example.com` with **your own email** (the one you'll use for admin).
 3. In Supabase: **SQL Editor → New query**, paste the whole file, click **Run**. It should say "Success".
-   This creates every table, all the security rules, the 5 plans (₹99 / ₹149 / ₹259 / ₹599 / ₹999), your UPI ID `2728412a@bandhan`, and the two storage buckets.
+   This creates every table, all the security rules, the 6 plans (₹1 for 1 hour / ₹99 / ₹149 / ₹259 / ₹599 / ₹999), your UPI ID `2728412a@bandhan`, and the two storage buckets.
 4. (Optional but recommended) **Database → Extensions** → enable `pg_cron`, then run the two commented lines at the very end of `schema.sql`. This marks expired plans every 30 minutes. (Expired plans stop working immediately even without it — this only tidies up the status.)
 
 ## Step 3 — Sign-in settings in Supabase
