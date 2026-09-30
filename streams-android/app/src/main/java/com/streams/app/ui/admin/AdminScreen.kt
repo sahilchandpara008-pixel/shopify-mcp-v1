@@ -206,7 +206,7 @@ private fun OverviewTab() {
 private fun PaymentsTab() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Revoked" to "revoked", "All" to null)
+    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Failed" to "failed", "Revoked" to "revoked", "All" to null)
     var filter by rememberSaveable { mutableStateOf("Waiting") }
     var busyId by remember { mutableStateOf<String?>(null) }
     var rejecting by remember { mutableStateOf<Payment?>(null) }
@@ -572,6 +572,7 @@ private fun SettingsTab() {
         is Load.Ok -> {
             var upi by remember { mutableStateOf(s.data.upiId) }
             var payee by remember { mutableStateOf(s.data.payeeName) }
+            var mcc by remember { mutableStateOf(s.data.merchantCode.orEmpty()) }
             var busy by remember { mutableStateOf(false) }
             Column(
                 Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
@@ -592,13 +593,20 @@ private fun SettingsTab() {
                 Text("Customers pay to this UPI ID. Changes apply instantly.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(upi, { upi = it.trim() }, label = { Text("UPI ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(payee, { payee = it }, label = { Text("Payee name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    mcc, { v -> mcc = v.filter { it.isDigit() }.take(4) },
+                    label = { Text("Merchant code (MCC, optional)") },
+                    supportingText = { Text("4 digits from your merchant UPI provider (BharatPe, Paytm / PhonePe Business)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 BusyButton("Save", busy) {
                     if (!upi.contains("@") || payee.isBlank()) {
                         Toast.makeText(context, "Enter a valid UPI ID (like name@bank) and a name", Toast.LENGTH_LONG).show(); return@BusyButton
                     }
                     busy = true
                     scope.launch {
-                        runCatching { Repo.saveSettings(PaymentSettings(upi, payee)) }
+                        runCatching { Repo.saveSettings(PaymentSettings(upi, payee, merchantCode = mcc)) }
                             .onSuccess { Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show() }
                             .onFailure { Toast.makeText(context, it.friendly(), Toast.LENGTH_LONG).show() }
                         busy = false

@@ -996,3 +996,94 @@ begin
   perform public.grant_plan_for_payment(pay);
   return pay;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- 18. MERCHANT UPI + FULL UPI APP RESULT
+--     The UPI link carries tr (order number) and, if set, mc (merchant category
+--     code). Whatever the UPI app returns - success, failure, pending - is saved.
+-- ---------------------------------------------------------------------
+alter table public.app_settings add column if not exists merchant_code text;
+
+alter table public.payments drop constraint if exists payments_status_check;
+alter table public.payments add constraint payments_status_check
+  check (status in ('initiated', 'pending', 'approved', 'rejected', 'revoked', 'failed'));
+
+-- Turns the UPI app's "k=v&k=v" response into json with lower-case keys.
+create or replace function public.parse_upi_response(p_response text)
+returns jsonb language plpgsql immutable as $$
+declare kv text; f jsonb := '{}';
+begin
+  foreach kv in array string_to_array(coalesce(p_response, ''), '&') loop
+    if position('=' in kv) > 0 then
+      f := f || jsonb_build_object(lower(trim(split_part(kv, '=', 1))), trim(substr(kv, position('=' in kv) + 1)));
+    end if;
+  end loop;
+  return f;
+end $$;
+
+-- SUCCESS → plan applied now. Also checks the response belongs to this order (txnRef).
+create or replace function public.confirm_upi_payment(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  f   jsonb;
+  st  text;
+  txn text;
+  pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if coalesce(length(p_response), 0) = 0 or length(p_response) > 2000 then
+    raise exception 'No response from the UPI app';
+  end if;
+  f  := public.parse_upi_response(p_response);
+  st := lower(coalesce(f ->> 'status', ''));
+  if st <> 'success' then
+    raise exception 'The UPI app did not report a successful payment (status: %)', coalesce(nullif(st, ''), 'unknown');
+  end if;
+  if nullif(f ->> 'txnref', '') is not null and exists (
+       select 1 from public.payments where id = p_payment_id and upper(reference) <> upper(f ->> 'txnref')) then
+    raise exception 'This payment response belongs to a different order';
+  end if;
+  txn := upper(regexp_replace(coalesce(nullif(f ->> 'approvalrefno', ''), nullif(f ->> 'txnid', ''), ''), '\s', '', 'g'));
+  if txn !~ '^[A-Z0-9]{6,40}$' then raise exception 'The UPI app did not return a transaction ID'; end if;
+  if exists (select 1 from public.payments where upper(txn_id) = txn or reference = txn) then
+    raise exception 'This transaction has already been used';
+  end if;
+  update public.payments
+     set status = 'approved', method = 'upi_auto', txn_id = txn, upi_response = left(p_response, 2000),
+         reviewed_at = now(), reviewed_by = 'auto (UPI app)'
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+     and created_at > now() - interval '20 minutes'
+  returning * into pay;
+  if not found then raise exception 'This payment has expired or was already processed. Please start again.'; end if;
+  perform public.grant_plan_for_payment(pay);
+  return pay;
+end $$;
+
+-- Whatever the UPI app returned (success, failure, pending) is saved on the order.
+--   SUCCESS          → approved, plan applied
+--   FAILURE          → failed (shown to the customer and in admin)
+--   SUBMITTED/other  → stays open; a bank credit can still activate it
+create or replace function public.report_upi_result(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  st  text := lower(coalesce(public.parse_upi_response(p_response) ->> 'status', ''));
+  pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if st = 'success' then
+    return public.confirm_upi_payment(p_payment_id, p_response);
+  end if;
+  update public.payments
+     set upi_response = left(p_response, 2000),
+         status       = case when st in ('failure', 'failed') then 'failed' else status end,
+         reviewed_at  = case when st in ('failure', 'failed') then now() else reviewed_at end,
+         reviewed_by  = case when st in ('failure', 'failed') then 'UPI app: payment failed' else reviewed_by end
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+  returning * into pay;
+  if not found then select * into pay from public.payments where id = p_payment_id and user_id = auth.uid(); end if;
+  return pay;
+end $$;
+
+revoke execute on function public.report_upi_result(uuid, text) from public, anon;
+grant execute on function public.report_upi_result(uuid, text) to authenticated;
+revoke execute on function public.parse_upi_response(text) from public, anon;

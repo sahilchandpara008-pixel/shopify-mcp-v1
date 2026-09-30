@@ -377,15 +377,26 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
         }
     }
 
-    // A few UPI apps do return "Status=SUCCESS&txnId=.." — use it as a shortcut when present.
+    // Back from GPay / PhonePe / Paytm / BharatPe: the UPI app returns
+    // "txnId=..&responseCode=..&Status=SUCCESS|FAILURE|SUBMITTED&txnRef=..&ApprovalRefNo=..".
+    // It is sent to the backend as-is, which saves it and decides.
     val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         busy = false
         val o = order ?: return@rememberLauncherForActivityResult
-        val response = upiResponse(result.data) ?: return@rememberLauncherForActivityResult
-        if (!response.contains("status=success", ignoreCase = true)) return@rememberLauncherForActivityResult
+        val response = upiResponse(result.data) ?: return@rememberLauncherForActivityResult // backed out: keep waiting
         scope.launch {
-            runCatching { Repo.confirmUpiPayment(o.id, response) }
-                .onSuccess { activated = it; order = null; onSubmitted() }
+            runCatching { Repo.reportUpiResult(o.id, response) }
+                .onSuccess { p ->
+                    when (p.status) {
+                        "approved" -> { activated = p; order = null; onSubmitted() }
+                        "failed" -> {
+                            order = null
+                            error = "Payment failed in your UPI app. No plan was bought — please try again."
+                        }
+                        else -> Unit // pending: keep waiting, we check every few seconds
+                    }
+                }
+                .onFailure { error = it.friendly() }
         }
     }
     fun openUpiApp(settings: PaymentSettings, o: Payment) {
@@ -623,6 +634,7 @@ private fun PaymentRow(p: Payment) {
         "approved" -> (if (p.isAuto) "Paid" else "Approved") to Green
         "rejected" -> "Rejected" to MaterialTheme.colorScheme.error
         "revoked" -> "Cancelled" to MaterialTheme.colorScheme.error
+        "failed" -> "Failed" to MaterialTheme.colorScheme.error
         else -> "Waiting" to Amber
     }
     Row(
@@ -651,6 +663,8 @@ private fun upiIntent(s: PaymentSettings, order: Payment): Intent {
         .scheme("upi").authority("pay")
         .appendQueryParameter("pa", s.upiId)
         .appendQueryParameter("pn", s.payeeName)
+        .apply { s.merchantCode?.takeIf { it.isNotBlank() }?.let { appendQueryParameter("mc", it.trim()) } }
+        .appendQueryParameter("tr", order.reference) // our order number — the UPI app echoes it back as txnRef
         .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, order.amount ?: 0.0))
         .appendQueryParameter("cu", "INR")
         .appendQueryParameter("tn", "Streams ${order.reference}")

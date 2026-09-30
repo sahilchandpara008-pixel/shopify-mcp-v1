@@ -344,7 +344,7 @@ async function Overview(main) {
 // ---------------------------------------------------------------- Payments
 let payFilter = "pending";
 async function Payments(main) {
-  const filters = [["Waiting", "pending"], ["Approved", "approved"], ["Rejected", "rejected"], ["Revoked", "revoked"], ["All", null]];
+  const filters = [["Waiting", "pending"], ["Approved", "approved"], ["Rejected", "rejected"], ["Failed", "failed"], ["Revoked", "revoked"], ["All", null]];
   let q = sb.from("payments").select("*").order("created_at", { ascending: false }).limit(300);
   q = payFilter ? q.eq("status", payFilter) : q.neq("status", "initiated");
   const rows = await must(q);
@@ -669,11 +669,13 @@ async function Settings(main) {
     <p class="muted small">Customers pay to this UPI ID. Changes apply in the app immediately.</p>
     <label>UPI ID</label><input type="text" id="sUpi" value="${esc(s.upi_id)}">
     <label>Payee name</label><input type="text" id="sName" value="${esc(s.payee_name)}">
+    <label>Merchant code (MCC, optional)</label><input type="text" id="sMcc" maxlength="4" value="${esc(s.merchant_code || "")}">
+    <p class="muted small">4 digits from your merchant UPI provider (BharatPe, Paytm / PhonePe Business). Sent to the UPI app with each payment.</p>
     <div style="height:14px"></div><button class="btn primary" id="sSave">Save</button><div id="sMsg"></div></div>`;
   $("sSave").onclick = async () => {
-    const upi = $("sUpi").value.trim(), name = $("sName").value.trim();
+    const upi = $("sUpi").value.trim(), name = $("sName").value.trim(), mcc = $("sMcc").value.replace(/\D/g, "");
     if (!upi.includes("@") || !name) { $("sMsg").innerHTML = `<div class="err">Enter a valid UPI ID (like name@bank) and a name.</div>`; return; }
-    try { await must(sb.from("app_settings").update({ upi_id: upi, payee_name: name }).eq("id", 1)); $("sMsg").innerHTML = `<div class="ok">Saved.</div>`; }
+    try { await must(sb.from("app_settings").update({ upi_id: upi, payee_name: name, merchant_code: mcc || null }).eq("id", 1)); $("sMsg").innerHTML = `<div class="ok">Saved.</div>`; }
     catch (err) { $("sMsg").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; }
   };
 }

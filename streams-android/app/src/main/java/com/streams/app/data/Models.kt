@@ -123,6 +123,8 @@ data class PaymentSettings(
     @SerialName("upi_id") val upiId: String,
     @SerialName("payee_name") val payeeName: String,
     @SerialName("cloud_quota_gb") val cloudQuotaGb: Int = 2048,
+    /** Merchant category code (mc) for a merchant UPI ID, e.g. from BharatPe / Paytm / PhonePe Business. */
+    @SerialName("merchant_code") val merchantCode: String? = null,
 )
 
 /** A file in the member's private Cloud Storage folder (user-files/<user id>/...). */

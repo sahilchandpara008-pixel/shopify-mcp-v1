@@ -157,6 +157,15 @@ object Repo {
             limit(8)
         }.decodeList()
 
+    /**
+     * Step 2: send whatever the UPI app returned to the backend. SUCCESS → plan applied now,
+     * FAILURE → order marked failed, anything else → order stays open.
+     */
+    suspend fun reportUpiResult(paymentId: String, response: String): Payment =
+        supabase.postgrest.rpc("report_upi_result", buildJsonObject {
+            put("p_payment_id", paymentId); put("p_response", response)
+        }).decodeAs()
+
     /** Step 2: forward the UPI app's response; on Status=SUCCESS the plan is applied immediately. */
     suspend fun confirmUpiPayment(paymentId: String, response: String): Payment =
         supabase.postgrest.rpc("confirm_upi_payment", buildJsonObject {
@@ -192,6 +201,7 @@ object Repo {
     suspend fun saveSettings(s: PaymentSettings) {
         supabase.from("app_settings").update(buildJsonObject {
             put("upi_id", s.upiId.trim()); put("payee_name", s.payeeName.trim())
+            put("merchant_code", s.merchantCode?.trim()?.ifEmpty { null })
         }) { filter { eq("id", 1) } }
     }
 
