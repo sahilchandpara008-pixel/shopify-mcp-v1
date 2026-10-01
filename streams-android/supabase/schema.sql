@@ -1916,3 +1916,26 @@ grant  execute on function public.apply_verified_payment(uuid, numeric, text, te
 revoke execute on function public.try_verify_payment(uuid) from public, anon, authenticated;
 revoke execute on function public.check_payment_status(uuid) from public, anon;
 grant  execute on function public.check_payment_status(uuid) to authenticated;
+
+-- =====================================================================
+-- 22. One app: no SMS auto-verify. The admin verifies an open order by
+--     matching it with the bank statement and entering that credit's UTR.
+-- =====================================================================
+create or replace function public.admin_verify_payment(p_payment_id uuid, p_utr text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  pay public.payments;
+  utr text := upper(regexp_replace(coalesce(p_utr, ''), '\s', '', 'g'));
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  if utr !~ '^[0-9A-Z]{10,30}$' then raise exception 'Reference number should be the 12-digit UTR from your bank statement'; end if;
+  select * into pay from public.payments where id = p_payment_id;
+  if not found then raise exception 'Order not found'; end if;
+  if pay.status = 'approved' then raise exception 'This payment was already processed'; end if;
+  if pay.status not in ('initiated', 'failed', 'cancelled', 'pending') then
+    raise exception 'This order can no longer be paid (status %)', pay.status;
+  end if;
+  return public.apply_verified_payment(pay.id, pay.amount, utr, null, 'admin', null);
+end $$;
+revoke execute on function public.admin_verify_payment(uuid, text) from public, anon;
+grant execute on function public.admin_verify_payment(uuid, text) to authenticated;

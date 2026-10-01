@@ -170,18 +170,12 @@ object Repo {
         }.decodeList<Payment>().firstOrNull()
     }
 
-    /** Owner's phone: a "credited" SMS/notification arrived — the server activates the matching order. */
-    suspend fun recordBankCredit(amount: Double, ref: String?, source: String, raw: String) {
-        supabase.postgrest.rpc("record_bank_credit", buildJsonObject {
-            put("p_amount", amount); put("p_ref", ref); put("p_source", source); put("p_raw", raw)
+    /** Admin saw this order's money in the bank statement: activates it with that UTR as evidence. */
+    suspend fun adminVerifyPayment(paymentId: String, utr: String) {
+        supabase.postgrest.rpc("admin_verify_payment", buildJsonObject {
+            put("p_payment_id", paymentId); put("p_utr", utr)
         })
     }
-
-    suspend fun recentBankCredits(): List<BankCredit> =
-        supabase.from("bank_credits").select {
-            order("received_at", Order.DESCENDING)
-            limit(8)
-        }.decodeList()
 
     /**
      * Step 2: send whatever the UPI app returned to the backend. SUCCESS → plan applied now,

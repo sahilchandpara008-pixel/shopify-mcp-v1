@@ -96,18 +96,15 @@ Only owner/manager accounts can sign in; everyone else is signed straight back o
 
 ## How payments work
 
-**Automatic (default).**
-1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order for **exactly the plan price**, open for 20 minutes.
-2. Their UPI app (GPay, PhonePe, Paytm…) opens with that exact amount; the note carries the order number (`Streams STR…`). The app shows *Waiting for your payment* and checks the order every 3 seconds.
-3. The money reaches your account. **Your phone** (Streams app, signed in as owner, *Admin → Settings → Auto-verify payments* switched on) reads the bank's "credited" SMS and/or the UPI app's "received" notification and sends the amount + UTR to `record_bank_credit`.
-4. The server finds the most recent open order for that amount and applies the plan (if two customers buy the same plan within minutes, each credit activates one of them and the credit is flagged so you can double-check): `new expiry = later of (now, current expiry) + plan length`. The customer's app flips to *Payment successful* — even if the UPI app never sends them back.
-5. The payment shows in **Admin → Payments → Approved** as *Auto · money received*. Admin → Settings lists the recent credits your phone has seen.
+One app does everything: customers use it normally, and the owner opens the admin panel by tapping the version number on Profile 7 times. The app asks for no SMS or notification access, so it installs without Play Protect blocking it.
 
-**Setting up the checker phone (once).** Each build produces two APKs: **Streams** (for customers — no SMS/notification access, so Play Protect allows it) and **Streams Admin** (owner's phone only). Install *Streams Admin* on the phone that receives your bank SMS / UPI alerts — because it reads SMS, Play Protect blocks it when installed from WhatsApp/a browser, so first turn off Play Store → profile icon → Play Protect → ⚙ → *Scan apps with Play Protect*, install, then turn it back on. Sign in as owner → Admin → Settings → switch on *Auto-verify payments* → allow SMS and notification access. If Android says "restricted setting", open App info → ⋮ → *Allow restricted settings* first. Keep that phone online.
+1. Customer picks a plan on **Profile** → taps **Pay via UPI**. The server creates an order for **exactly the plan price** (order number `UPI…`, sent to the UPI app as `tr`).
+2. Their UPI app (GPay, PhonePe, Paytm…) opens with that amount. Whatever the UPI app answers is stored for reference only — **it never activates a plan**.
+3. The order stays **Pending** (the customer can tap *Check payment status*; it stays open for 24 h).
+4. You match it with your bank statement: **Admin → Payments → Pending → Mark as paid**, type that credit's UTR. The server checks the amount and that the UTR was never used, then applies the plan: `new expiry = later of (now, current expiry) + plan length`.
+5. Fully automatic activation needs a trusted status source from the bank (UPI transaction-status API or payment callback for the merchant ID). That plugs into `apply_verified_payment` with source `provider_api` from a server-side function.
 
-**Manual fallback.** If no credit is matched (e.g. the customer changed the amount), they tap *Enter UTR*, and it waits in **Payments → Waiting** for you to Approve or Reject.
-
-> Only SMS from bank sender IDs (letters, not phone numbers) and notifications from GPay / PhonePe / Paytm / BHIM / Bandhan apps are read, and only while the switch is on.
+**Manual UTR.** A customer can also type their UTR; it waits in **Payments → UTR review** for you to Approve or Reject.
 
 Built-in protections (all enforced in the database, not in the app): the price always comes from the plans table; a customer can only create *pending*/*initiated* payments for themselves; an auto confirmation needs a SUCCESS status, must arrive within 30 minutes of the order, and each transaction ID works once; one pending payment per customer; a UTR can only be used once; only owner/manager accounts can approve; a double-tap cannot approve twice; customers can never write to their own subscription.
 

@@ -460,7 +460,7 @@ async function Payments(main) {
   if (payFilter) q = q.eq("status", payFilter);
   const rows = await must(q);
   main.innerHTML = `<h2>Payments</h2>
-    <p class="muted small">A subscription is activated only after the payment is <b>verified</b> (bank credit seen by Streams Admin, admin approval, or a bank/provider status API). What the UPI app says is stored for reference only — it is never treated as proof. “Pending” orders wait for that verification; “UTR review” holds UTRs customers typed by hand: check them and approve or reject.</p>
+    <p class="muted small">A subscription is activated only after the payment is <b>verified</b> (you match it with your bank statement and tap <b>Mark as paid</b> with the UTR, or a bank/provider status API). What the UPI app says is stored for reference only — it is never treated as proof. “Pending” orders wait for that verification; “UTR review” holds UTRs customers typed by hand: check them and approve or reject.</p>
     <div class="chips">${filters.map(([l, v]) => `<button class="chip ${v === payFilter ? "on" : ""}" data-f="${v ?? ""}">${l}</button>`).join("")}</div>
     <div class="list" id="payList"></div>`;
   main.querySelectorAll(".chip").forEach(c => c.onclick = () => { payFilter = c.dataset.f || null; renderTabs(); });
@@ -469,6 +469,7 @@ async function Payments(main) {
   const label = p => ({ initiated: p.client_status ? "PENDING" : "CREATED", approved: "SUCCESS", failed: "FAILED", cancelled: "CANCELLED", pending: "UTR REVIEW", rejected: "REJECTED", revoked: "REVOKED" })[p.status] || String(p.status).toUpperCase();
   for (const p of rows) {
     const el = document.createElement("div"); el.className = "item";
+    const utr = p.txn_id || p.reference;
     const statusColor = p.status === "approved" ? "var(--green)" : (p.status === "pending" || p.status === "initiated") ? "var(--amber)" : "var(--err)";
     el.innerHTML = `<div class="body">
         <div class="row"><span class="title">${esc(p.user_email || "—")}</span><span class="spacer"></span><b>${rupees(p.amount)}</b></div>
@@ -482,7 +483,8 @@ async function Payments(main) {
         ${(p.status === "rejected" || p.status === "revoked") && p.admin_note ? `<div class="small muted">Note: ${esc(p.admin_note)}</div>` : ""}
       </div>
       ${p.status === "pending" ? `<div class="row"><button class="btn primary" data-a="approve">Approve</button><button class="btn" data-a="reject">Reject</button></div>` : ""}
-      ${p.status === "approved" ? `<div class="row"><button class="btn" data-a="revoke">Revoke</button></div>` : ""}`;
+      ${p.status === "approved" ? `<div class="row"><button class="btn" data-a="revoke">Revoke</button></div>` : ""}
+      ${["initiated", "failed", "cancelled"].includes(p.status) ? `<div class="row"><button class="btn" data-a="markpaid">Mark as paid</button></div>` : ""}`;
     const ap = el.querySelector('[data-a="approve"]');
     if (ap) ap.onclick = async () => {
       if (!confirm(`Approve ${rupees(p.amount)} from ${p.user_email} (UTR ${p.reference})?`)) return;
@@ -514,6 +516,16 @@ async function Payments(main) {
           btn.disabled = true;
           try { await must(sb.rpc("revoke_payment", { p_payment_id: p.id, p_note: note })); dlg.close(); renderTabs(); }
           catch (err) { $("rvErr").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; btn.disabled = false; }
+        } }]);
+    const mp = el.querySelector('[data-a="markpaid"]');
+    if (mp) mp.onclick = () => openDialog("Mark as paid?",
+      `<p class="muted">Order ${esc(p.reference)} · ${rupees(p.amount)} · ${esc(p.user_email || "")}<br>Only do this if you can see exactly ${rupees(p.amount)} credited in your bank statement. Type that credit's UTR — each UTR can be used once.</p>
+       <label>Bank UTR (12 digits)</label><input type="text" id="mpUtr" value="${esc(p.txn_id || "")}"><div id="mpErr"></div>`,
+      [{ label: "Cancel", onClick: () => dlg.close() },
+       { label: "Activate plan", cls: "primary", onClick: async btn => {
+          btn.disabled = true;
+          try { await must(sb.rpc("admin_verify_payment", { p_payment_id: p.id, p_utr: $("mpUtr").value.trim() })); dlg.close(); toast("Verified — plan activated"); renderTabs(); }
+          catch (err) { $("mpErr").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; btn.disabled = false; }
         } }]);
     list.appendChild(el);
   }

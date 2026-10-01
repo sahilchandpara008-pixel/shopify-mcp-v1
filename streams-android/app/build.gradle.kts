@@ -52,24 +52,6 @@ android {
         }
     }
 
-    // Two apps from one codebase:
-    //  • customer — "Streams", what everyone installs. No SMS / notification access, so Google
-    //    Play Protect lets it install from WhatsApp or a browser.
-    //  • admin    — "Streams Admin", only for the owner's phone. Same app plus Auto-verify
-    //    payments (reads the bank's "credited" SMS / UPI notifications). See src/admin/.
-    flavorDimensions += "role"
-    productFlavors {
-        create("customer") {
-            dimension = "role"
-            buildConfigField("boolean", "AUTO_VERIFY", "false")
-        }
-        create("admin") {
-            dimension = "role"
-            applicationIdSuffix = ".admin"
-            buildConfigField("boolean", "AUTO_VERIFY", "true")
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -104,7 +86,6 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
-    implementation("androidx.work:work-runtime-ktx:2.10.1") // uploads detected payments reliably
     implementation("com.android.installreferrer:installreferrer:2.2") // Google Play Install Referrer (ad attribution)
 
     // Supabase (auth, database, file storage)

@@ -148,17 +148,6 @@ data class Payment(
     val utr get() = txnId ?: reference
 }
 
-/** A credit seen on the owner's phone (Admin → Settings → Auto-verify). */
-@Serializable
-data class BankCredit(
-    val id: String,
-    val amount: Double,
-    val ref: String? = null,
-    val source: String? = null,
-    @SerialName("payment_id") val paymentId: String? = null,
-    @SerialName("received_at") val receivedAt: String,
-)
-
 @Serializable
 data class PaymentSettings(
     @SerialName("upi_id") val upiId: String,

@@ -216,6 +216,7 @@ private fun PaymentsTab() {
     var busyId by remember { mutableStateOf<String?>(null) }
     var rejecting by remember { mutableStateOf<Payment?>(null) }
     var revoking by remember { mutableStateOf<Payment?>(null) }
+    var verifying by remember { mutableStateOf<Payment?>(null) }
     val load = rememberLoad(filter) { Repo.adminPayments(filters[filter]) }
 
     Column {
@@ -280,12 +281,55 @@ private fun PaymentsTab() {
                                 )
                                 // Money never arrived? Take the plan days back.
                                 if (p.status == "approved") TextButton(onClick = { revoking = p }) { Text("Revoke") }
+                                // Money is in the bank statement but the order is still open: activate with the UTR as evidence.
+                                if (p.status in listOf("initiated", "failed", "cancelled")) {
+                                    TextButton(onClick = { verifying = p }) { Text("Mark as paid") }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    verifying?.let { p ->
+        var utr by remember { mutableStateOf(p.txnId.orEmpty()) }
+        var err by remember { mutableStateOf<String?>(null) }
+        var saving by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { verifying = null },
+            title = { Text("Mark as paid?") },
+            text = {
+                Column {
+                    Text("Order ${p.reference} · ${formatPrice(p.amount)} · ${p.userEmail ?: ""}", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Only do this if you can see exactly ${formatPrice(p.amount)} credited in your bank statement. " +
+                            "Type that credit's UTR — each UTR can be used once.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    OutlinedTextField(utr, { utr = it.trim() }, label = { Text("Bank UTR (12 digits)") }, singleLine = true, modifier = Modifier.padding(top = 8.dp))
+                    err?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !saving, onClick = {
+                    saving = true
+                    scope.launch {
+                        runCatching { Repo.adminVerifyPayment(p.id, utr) }
+                            .onSuccess {
+                                verifying = null
+                                Toast.makeText(context, "Verified — plan activated", Toast.LENGTH_SHORT).show()
+                                load.reload()
+                            }
+                            .onFailure { err = it.friendly() }
+                        saving = false
+                    }
+                }) { Text("Activate plan") }
+            },
+            dismissButton = { TextButton(onClick = { verifying = null }) { Text("Cancel") } },
+        )
     }
 
     rejecting?.let { p ->
@@ -594,16 +638,12 @@ private fun SettingsTab() {
                 Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (com.streams.app.BuildConfig.AUTO_VERIFY) {
-                    AutoVerifyCard()
-                } else {
-                    Text(
-                        "Automatic payment activation needs the \"Streams Admin\" app on the phone that gets your " +
-                            "bank SMS / UPI alerts. Open Admin → Settings there and switch on Auto-verify.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Amber,
-                    )
-                }
+                Text(
+                    "Payments: a plan turns on only after the payment is verified. Open Payments → Pending, match the " +
+                        "order with your bank statement and tap “Mark as paid” with the bank UTR.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Amber,
+                )
                 Spacer(Modifier.size(8.dp))
                 Text("UPI payment details", style = MaterialTheme.typography.titleMedium)
                 Text("Customers pay to this UPI ID. Changes apply instantly.", style = MaterialTheme.typography.bodySmall)
