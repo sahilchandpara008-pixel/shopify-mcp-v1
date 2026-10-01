@@ -207,8 +207,12 @@ private fun OverviewTab() {
 private fun PaymentsTab() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Failed" to "failed", "Not completed" to "initiated", "Revoked" to "revoked", "All" to null)
-    var filter by rememberSaveable { mutableStateOf("Waiting") }
+    // Pending = order created / UPI app answered but not verified yet. "UTR review" = customer typed a UTR.
+    val filters = mapOf(
+        "All" to null, "Pending" to "initiated", "Success" to "approved", "Failed" to "failed",
+        "Cancelled" to "cancelled", "UTR review" to "pending", "Rejected" to "rejected", "Revoked" to "revoked",
+    )
+    var filter by rememberSaveable { mutableStateOf("All") }
     var busyId by remember { mutableStateOf<String?>(null) }
     var rejecting by remember { mutableStateOf<Payment?>(null) }
     var revoking by remember { mutableStateOf<Payment?>(null) }
@@ -230,21 +234,27 @@ private fun PaymentsTab() {
                             Text(p.userEmail ?: "—", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(formatPrice(p.amount), style = MaterialTheme.typography.titleMedium)
                         }
-                        Text("${p.planName} · ${formatDate(p.createdAt)}", style = MaterialTheme.typography.bodySmall)
-                        Text("UTR: ${p.utr}", style = MaterialTheme.typography.titleSmall, color = Amber, modifier = Modifier.padding(top = 4.dp))
-                        if (p.isAuto) {
-                            Text(
-                                if (p.bankVerified) "Auto · money received (bank alert matched) · order ${p.reference}"
-                                else "Auto · confirmed by the UPI app, not yet seen in bank · order ${p.reference}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (p.bankVerified) Green else Amber,
-                            )
-                        }
+                        Text("${p.planName} · Order ${p.reference}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            p.displayStatus,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = when (p.status) {
+                                "approved" -> Green
+                                "initiated", "pending" -> Amber
+                                else -> MaterialTheme.colorScheme.error
+                            },
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                        p.txnId?.let { Text("UTR / provider txn: $it", style = MaterialTheme.typography.bodySmall, color = Amber) }
                         p.upiStatusLabel?.let {
-                            Text("UPI app status: $it", style = MaterialTheme.typography.bodySmall)
+                            Text("UPI app said: $it (not proof of payment)", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text("Created ${formatDate(p.createdAt)}" + (p.updatedAt?.let { " · Updated ${formatDate(it)}" } ?: ""), style = MaterialTheme.typography.bodySmall)
+                        p.verifiedAt?.let {
+                            Text("Verified ${formatDate(it)} · ${p.verificationSource ?: "—"}", style = MaterialTheme.typography.bodySmall, color = Green)
                         }
                         if (p.status == "initiated") {
-                            Text("Started, not completed — no final answer yet", style = MaterialTheme.typography.bodySmall, color = Amber)
+                            Text("Waiting for verified payment — not activated", style = MaterialTheme.typography.bodySmall, color = Amber)
                         }
                         if (p.status == "rejected" || p.status == "revoked") p.adminNote?.let { Text("Note: $it", style = MaterialTheme.typography.bodySmall) }
                         if (p.status == "pending") {
@@ -264,9 +274,8 @@ private fun PaymentsTab() {
                         } else {
                             Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    p.status.replaceFirstChar { it.uppercase() } + (p.reviewedBy?.let { " · $it" } ?: ""),
-                                    color = if (p.status == "approved") Green else MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.labelLarge,
+                                    p.reviewedBy?.let { "By $it" } ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.weight(1f),
                                 )
                                 // Money never arrived? Take the plan days back.

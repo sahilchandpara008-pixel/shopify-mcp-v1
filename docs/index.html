@@ -444,7 +444,7 @@ async function userDetail(id) {
 }
 
 // ---------------------------------------------------------------- Payments
-let payFilter = "pending";
+let payFilter = null;
 // "txnId=..&Status=FAILURE&responseCode=ZM" → "FAILURE (ZM)"
 function upiStatus(resp) {
   if (!resp) return "";
@@ -455,30 +455,31 @@ function upiStatus(resp) {
   return f.responsecode && st !== "NO RESPONSE" ? `${st} (${f.responsecode})` : st;
 }
 async function Payments(main) {
-  const filters = [["Waiting", "pending"], ["Approved", "approved"], ["Rejected", "rejected"], ["Failed", "failed"], ["Not completed", "initiated"], ["Revoked", "revoked"], ["All", null]];
+  const filters = [["All", null], ["Pending", "initiated"], ["Success", "approved"], ["Failed", "failed"], ["Cancelled", "cancelled"], ["UTR review", "pending"], ["Rejected", "rejected"], ["Revoked", "revoked"]];
   let q = sb.from("payments").select("*").order("created_at", { ascending: false }).limit(300);
-  q = payFilter ? q.eq("status", payFilter) : q.neq("status", "initiated");
+  if (payFilter) q = q.eq("status", payFilter);
   const rows = await must(q);
   main.innerHTML = `<h2>Payments</h2>
-    <p class="muted small">Payments made through the app's “Pay via UPI” button are confirmed automatically from the UPI app's response (marked <b>Auto</b>). Match their UTR against your bank statement and <b>Revoke</b> any that never arrived — that takes the plan's days back. “Waiting” holds UTRs customers typed by hand: check them and approve or reject.</p>
+    <p class="muted small">A subscription is activated only after the payment is <b>verified</b> (bank credit seen by Streams Admin, admin approval, or a bank/provider status API). What the UPI app says is stored for reference only — it is never treated as proof. “Pending” orders wait for that verification; “UTR review” holds UTRs customers typed by hand: check them and approve or reject.</p>
     <div class="chips">${filters.map(([l, v]) => `<button class="chip ${v === payFilter ? "on" : ""}" data-f="${v ?? ""}">${l}</button>`).join("")}</div>
     <div class="list" id="payList"></div>`;
   main.querySelectorAll(".chip").forEach(c => c.onclick = () => { payFilter = c.dataset.f || null; renderTabs(); });
   const list = $("payList");
   if (!rows.length) { list.innerHTML = `<div class="empty">Nothing here.</div>`; return; }
+  const label = p => ({ initiated: p.client_status ? "PENDING" : "CREATED", approved: "SUCCESS", failed: "FAILED", cancelled: "CANCELLED", pending: "UTR REVIEW", rejected: "REJECTED", revoked: "REVOKED" })[p.status] || String(p.status).toUpperCase();
   for (const p of rows) {
     const el = document.createElement("div"); el.className = "item";
-    const statusColor = p.status === "approved" ? "var(--green)" : p.status === "pending" ? "var(--amber)" : "var(--err)";
-    const utr = p.txn_id || p.reference, auto = p.method === "upi_auto";
+    const statusColor = p.status === "approved" ? "var(--green)" : (p.status === "pending" || p.status === "initiated") ? "var(--amber)" : "var(--err)";
     el.innerHTML = `<div class="body">
         <div class="row"><span class="title">${esc(p.user_email || "—")}</span><span class="spacer"></span><b>${rupees(p.amount)}</b></div>
-        <div class="muted small">${esc(p.plan_name)} · ${when(p.created_at)}</div>
-        <div class="utr">UTR: ${esc(utr)}</div>
-        ${upiStatus(p.upi_response) ? `<div class="small">UPI app status: <b>${esc(upiStatus(p.upi_response))}</b></div>` : ""}
-        ${p.status === "initiated" ? `<div class="small" style="color:var(--amber)">Started, not completed — no final answer yet</div>` : ""}
-        ${auto ? `<div class="small" style="color:${p.bank_credit_id ? "var(--green)" : "var(--amber)"}">Auto · ${p.bank_credit_id ? "money received (bank alert matched)" : "confirmed by the UPI app, not yet seen in bank"} · order ${esc(p.reference)}</div>` : ""}
+        <div class="muted small">${esc(p.plan_name)} · Order <b>${esc(p.reference)}</b></div>
+        <div class="small" style="color:${statusColor}"><b>${esc(label(p))}</b>${p.reviewed_by ? " · by " + esc(p.reviewed_by) : ""}</div>
+        ${p.txn_id ? `<div class="utr">UTR / provider txn: ${esc(p.txn_id)}</div>` : ""}
+        ${upiStatus(p.upi_response) ? `<div class="small">UPI app said: <b>${esc(upiStatus(p.upi_response))}</b> <span class="muted">(not proof of payment)</span></div>` : ""}
+        <div class="muted small">Created ${when(p.created_at)}${p.updated_at ? " · Updated " + when(p.updated_at) : ""}</div>
+        ${p.verified_at ? `<div class="small" style="color:var(--green)">Verified ${when(p.verified_at)} · ${esc(p.verification_source || "—")}</div>` : ""}
+        ${p.status === "initiated" ? `<div class="small" style="color:var(--amber)">Waiting for verified payment — not activated</div>` : ""}
         ${(p.status === "rejected" || p.status === "revoked") && p.admin_note ? `<div class="small muted">Note: ${esc(p.admin_note)}</div>` : ""}
-        ${p.status !== "pending" ? `<div class="small" style="color:${statusColor}">${esc(p.status[0].toUpperCase() + p.status.slice(1))}${p.reviewed_by ? " by " + esc(p.reviewed_by) : ""}</div>` : ""}
       </div>
       ${p.status === "pending" ? `<div class="row"><button class="btn primary" data-a="approve">Approve</button><button class="btn" data-a="reject">Reject</button></div>` : ""}
       ${p.status === "approved" ? `<div class="row"><button class="btn" data-a="revoke">Revoke</button></div>` : ""}`;

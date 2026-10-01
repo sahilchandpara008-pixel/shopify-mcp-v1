@@ -136,7 +136,7 @@ object Repo {
     /** My unfinished automatic order from the last hour, if any (so waiting survives an app restart). */
     suspend fun myOpenOrder(): Payment? {
         val uid = supabase.auth.currentUserOrNull()?.id ?: return null
-        val since = java.time.OffsetDateTime.now().minusMinutes(20).toString()
+        val since = java.time.OffsetDateTime.now().minusHours(24).toString()   // open orders stay recoverable for 24 h
         return supabase.from("payments").select {
             filter { eq("user_id", uid); eq("status", "initiated"); gt("created_at", since) }
             order("created_at", Order.DESCENDING)
@@ -165,6 +165,14 @@ object Repo {
         supabase.postgrest.rpc("report_upi_result", buildJsonObject {
             put("p_payment_id", paymentId); put("p_response", response)
         }).decodeAs()
+
+    /**
+     * Ask the backend for the authoritative status of my order. The server tries trusted
+     * verification (bank credit seen on the owner's phone; later the bank's status API) and
+     * returns the order — the app never decides that a payment succeeded.
+     */
+    suspend fun checkPaymentStatus(paymentId: String): Payment =
+        supabase.postgrest.rpc("check_payment_status", buildJsonObject { put("p_payment_id", paymentId) }).decodeAs()
 
     /** Customer closes an unfinished order (UPI app gave no answer and they did not pay). */
     suspend fun cancelUpiPayment(paymentId: String) {
@@ -219,7 +227,7 @@ object Repo {
 
     suspend fun adminPayments(status: String?): List<Payment> =
         supabase.from("payments").select {
-            filter { if (status != null) eq("status", status) else neq("status", "initiated") }
+            if (status != null) filter { eq("status", status) }
             order("created_at", Order.DESCENDING)
             limit(200)
         }.decodeList()

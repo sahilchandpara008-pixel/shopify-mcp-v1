@@ -110,7 +110,26 @@ data class Payment(
     @SerialName("bank_credit_id") val bankCreditId: String? = null,
     /** Exactly what the UPI app returned ("txnId=..&Status=SUCCESS|FAILURE|..&responseCode=.."). */
     @SerialName("upi_response") val upiResponse: String? = null,
+    /** What the UPI app said (success/failure/…): a client report only, never proof of payment. */
+    @SerialName("client_status") val clientStatus: String? = null,
+    @SerialName("verified_at") val verifiedAt: String? = null,
+    /** Who verified it: bank_credit | admin | provider_api. */
+    @SerialName("verification_source") val verificationSource: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null,
 ) {
+    /** Order status shown to people: CREATED · PENDING · SUCCESS · FAILED · CANCELLED (+ admin-review states). */
+    val displayStatus: String
+        get() = when (status) {
+            "initiated" -> if (clientStatus == null) "CREATED" else "PENDING"
+            "approved" -> "SUCCESS"
+            "failed" -> "FAILED"
+            "cancelled" -> "CANCELLED"
+            "pending" -> "UTR REVIEW"
+            "rejected" -> "REJECTED"
+            "revoked" -> "REVOKED"
+            else -> status.uppercase()
+        }
+
     private fun upiField(key: String) = upiResponse?.split('&')
         ?.firstOrNull { it.substringBefore('=').equals(key, ignoreCase = true) }
         ?.substringAfter('=', "")?.takeIf { it.isNotBlank() }

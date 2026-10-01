@@ -1661,3 +1661,258 @@ begin
 end $$;
 revoke execute on function public.cancel_upi_payment(uuid) from public, anon;
 grant  execute on function public.cancel_upi_payment(uuid) to authenticated;
+-- ---------------------------------------------------------------------
+-- 21. VERIFIED-ONLY UPI PAYMENTS
+--     The UPI app's answer (SUCCESS/FAILURE) is stored as a *client report* only.
+--     A subscription is activated ONLY by apply_verified_payment(), which is called
+--     by trusted verification sources:
+--       * 'bank_credit'  – the bank's credit alert seen on the owner's phone
+--                          (Streams Admin → Auto-verify, record_bank_credit)
+--       * 'admin'        – an owner/manager approving a UTR after checking the bank
+--       * 'provider_api' – reserved for the merchant bank's status API / webhook
+--                          (pending integration; only service_role may call it)
+--     Order lifecycle shown to people:
+--       CREATED/PENDING = 'initiated'   SUCCESS = 'approved'
+--       FAILED = 'failed'               CANCELLED = 'cancelled'
+-- ---------------------------------------------------------------------
+alter table public.subscription_plans add column if not exists code text;
+update public.subscription_plans set code = case
+    when name = '1 Hour Pass'   then 'TEST_1HOUR'
+    when name = 'Trial'         then 'TRIAL'
+    when name = 'Silver Plan'   then 'SILVER'
+    when name = 'Gold Plan'     then 'GOLD'
+    when name = 'Platinum Plan' then 'PLATINUM'
+    when name = 'Diamond Plan'  then 'DIAMOND' end
+ where code is null;
+create unique index if not exists subscription_plans_code_unique on public.subscription_plans (code) where code is not null;
+
+alter table public.payments add column if not exists verified_at         timestamptz;
+alter table public.payments add column if not exists verification_source text;
+alter table public.payments add column if not exists client_status       text;   -- what the UPI app reported
+alter table public.payments add column if not exists updated_at          timestamptz not null default now();
+alter table public.payments drop constraint if exists payments_status_check;
+alter table public.payments add constraint payments_status_check
+  check (status in ('initiated', 'pending', 'approved', 'rejected', 'revoked', 'failed', 'cancelled'));
+
+-- updated_at is set explicitly by every function below that changes a payment.
+
+-- Order numbers like UPI20261001A1B2C3D4 (letters/digits only: every UPI app accepts it as tr).
+create or replace function public.start_upi_payment(p_plan_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare r public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  if not exists (select 1 from public.subscription_plans where id = p_plan_id and active) then
+    raise exception 'This plan is not available';
+  end if;
+  -- Re-use an open order for the same plan instead of creating a second one.
+  select * into r from public.payments
+   where user_id = auth.uid() and status = 'initiated' and plan_id = p_plan_id
+     and created_at > now() - interval '24 hours'
+   order by created_at desc limit 1;
+  if found then return r; end if;
+  -- Switching plan closes the older open order (kept for the record).
+  update public.payments set status = 'cancelled', updated_at = now(), reviewed_at = now(), reviewed_by = 'replaced by a new order'
+   where user_id = auth.uid() and status = 'initiated';
+  insert into public.payments (plan_id, reference, status)
+  values (p_plan_id,
+          'UPI' || to_char(now() at time zone 'Asia/Kolkata', 'YYYYMMDD')
+                || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8)),
+          'initiated')
+  returning * into r;   -- amount = plan price, set by the server (payments_before_insert)
+  return r;
+end $$;
+
+-- The ONLY place a payment becomes SUCCESS (and a plan is granted). Idempotent.
+create or replace function public.apply_verified_payment(
+  p_payment_id uuid, p_amount numeric, p_utr text, p_provider_txn text, p_source text, p_bank_credit uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  pay public.payments;
+  utr text := nullif(upper(regexp_replace(coalesce(p_utr, ''), '\s', '', 'g')), '');
+  ptx text := nullif(upper(regexp_replace(coalesce(p_provider_txn, ''), '\s', '', 'g')), '');
+begin
+  if p_source not in ('bank_credit', 'admin', 'provider_api') then raise exception 'Unknown verification source'; end if;
+  select * into pay from public.payments where id = p_payment_id for update;
+  if not found then raise exception 'Order not found'; end if;
+  if pay.status = 'approved' then return pay; end if;                       -- already activated: no-op
+  if pay.status not in ('initiated', 'pending', 'failed', 'cancelled') then
+    raise exception 'This order can no longer be paid (status %)', pay.status;
+  end if;
+  if p_amount is null or round(p_amount, 2) <> pay.amount then
+    raise exception 'Amount mismatch: paid %, expected %', p_amount, pay.amount;
+  end if;
+  if coalesce(utr, ptx) is not null and exists (
+       select 1 from public.payments where id <> pay.id and upper(txn_id) = coalesce(utr, ptx)) then
+    raise exception 'This transaction has already been used';
+  end if;
+  update public.payments
+     set status = 'approved', txn_id = coalesce(utr, ptx, txn_id), verified_at = now(), updated_at = now(),
+         verification_source = p_source, bank_credit_id = coalesce(p_bank_credit, bank_credit_id),
+         reviewed_at = now(),
+         reviewed_by = case when p_source = 'admin' then coalesce(auth.jwt() ->> 'email', 'admin')
+                            else 'verified: ' || p_source end
+   where id = pay.id
+  returning * into pay;
+  perform public.grant_plan_for_payment(pay);   -- server time; extends from current expiry
+  return pay;
+end $$;
+
+-- Try to verify one order from trusted evidence already on the server:
+-- an unclaimed bank credit of exactly the order amount received after the order was created.
+create or replace function public.try_verify_payment(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments; c public.bank_credits;
+begin
+  select * into pay from public.payments where id = p_payment_id;
+  if not found or pay.status not in ('initiated', 'failed', 'cancelled') then return pay; end if;
+  select * into c from public.bank_credits
+   where payment_id is null and amount = pay.amount
+     and received_at >= pay.created_at - interval '2 minutes'
+     and received_at <= pay.created_at + interval '24 hours'
+   order by received_at limit 1 for update skip locked;
+  if not found then return pay; end if;
+  pay := public.apply_verified_payment(pay.id, c.amount, c.ref, null, 'bank_credit', c.id);
+  update public.bank_credits set payment_id = pay.id where id = c.id;
+  return pay;
+end $$;
+
+-- App: "I'm back from the UPI app" / "Check payment status". Owner only; returns the
+-- authoritative order (after trying verification). Never activates anything by itself.
+create or replace function public.check_payment_status(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  select * into pay from public.payments where id = p_payment_id and user_id = auth.uid();
+  if not found then raise exception 'Order not found'; end if;
+  return public.try_verify_payment(pay.id);
+end $$;
+
+-- App: what the UPI app said. Stored for the record only — SUCCESS does NOT activate.
+--   FAILURE → order failed (nothing to activate; a later verified bank credit still wins)
+--   SUCCESS / SUBMITTED / no answer → order stays open (PENDING) until verified
+create or replace function public.report_upi_result(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare
+  st  text := lower(coalesce(public.parse_upi_response(p_response) ->> 'status', ''));
+  pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  update public.payments
+     set upi_response  = left(p_response, 2000),
+         updated_at    = now(),
+         client_status = nullif(st, ''),
+         status        = case when st in ('failure', 'failed') then 'failed' else status end,
+         reviewed_at   = case when st in ('failure', 'failed') then now() else reviewed_at end,
+         reviewed_by   = case when st in ('failure', 'failed') then 'UPI app: payment failed' else reviewed_by end
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+  returning * into pay;
+  if not found then
+    select * into pay from public.payments where id = p_payment_id and user_id = auth.uid();
+    if not found then raise exception 'Order not found'; end if;
+    return pay;
+  end if;
+  return public.try_verify_payment(pay.id);
+end $$;
+
+-- Older app versions call this after a SUCCESS answer: now it only records it.
+create or replace function public.confirm_upi_payment(p_payment_id uuid, p_response text)
+returns public.payments language plpgsql security definer set search_path = public as $$
+begin
+  return public.report_upi_result(p_payment_id, p_response);
+end $$;
+
+create or replace function public.cancel_upi_payment(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  update public.payments
+     set status = 'cancelled', updated_at = now(), reviewed_at = now(), reviewed_by = 'cancelled by customer'
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+  returning * into pay;
+  if not found then select * into pay from public.payments where id = p_payment_id and user_id = auth.uid(); end if;
+  return pay;
+end $$;
+
+-- Admin approves a UTR claim after checking the bank statement (human verification).
+create or replace function public.approve_payment(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  select * into pay from public.payments where id = p_payment_id;
+  if not found or pay.status <> 'pending' then raise exception 'This payment was already processed'; end if;
+  return public.apply_verified_payment(pay.id, pay.amount, pay.reference, null, 'admin', null);
+end $$;
+
+-- Owner's phone reports a bank credit → verify the matching open order.
+create or replace function public.record_bank_credit(p_amount numeric, p_ref text, p_source text, p_raw text)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  c     public.bank_credits;
+  pay   public.payments;
+  v_ref text := nullif(upper(regexp_replace(coalesce(p_ref, ''), '\s', '', 'g')), '');
+  amt   numeric(10,2) := round(p_amount, 2);
+  open_count int;
+  target uuid;
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  if amt is null or amt <= 0 then raise exception 'Bad amount'; end if;
+  select * into c from public.bank_credits
+   where (v_ref is not null and bank_credits.ref = v_ref)
+      or (bank_credits.amount = amt and bank_credits.received_at > now() - interval '3 minutes'
+          and (v_ref is null or bank_credits.ref is null)
+          and split_part(bank_credits.source, ':', 1) <> split_part(coalesce(p_source, ''), ':', 1))
+   order by received_at desc limit 1 for update;
+  if found then
+    if c.ref is null and v_ref is not null then
+      update public.bank_credits set ref = v_ref where id = c.id returning * into c;
+      update public.payments set txn_id = coalesce(txn_id, v_ref), updated_at = now() where id = c.payment_id
+        and not exists (select 1 from public.payments p2 where upper(p2.txn_id) = v_ref);
+    end if;
+    return json_build_object('duplicate', true, 'payment_id', c.payment_id);
+  end if;
+  select count(*) into open_count from public.payments
+   where status in ('initiated', 'failed', 'cancelled') and amount = amt and created_at > now() - interval '20 minutes';
+  insert into public.bank_credits (amount, ref, source, raw, reported_by, ambiguous)
+  values (amt, v_ref, left(p_source, 80), left(p_raw, 500), auth.jwt() ->> 'email', open_count > 1)
+  returning * into c;
+  -- Prefer an open order whose UPI app reported success, then the newest open order.
+  select id into target from public.payments
+   where status in ('initiated', 'failed', 'cancelled') and amount = amt and created_at > now() - interval '20 minutes'
+   order by (client_status = 'success') desc nulls last, (status = 'initiated') desc, created_at desc
+   limit 1 for update skip locked;
+  if target is not null then
+    pay := public.apply_verified_payment(target, amt, v_ref, null, 'bank_credit', c.id);
+    update public.bank_credits set payment_id = pay.id where id = c.id;
+  end if;
+  return json_build_object('duplicate', false, 'payment_id', pay.id, 'plan', pay.plan_name,
+                           'email', pay.user_email, 'ambiguous', open_count > 1);
+end $$;
+
+-- Expired open orders are closed (kept for the record) instead of deleted.
+create or replace function public.expire_subscriptions()
+returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  with expired as (
+    update public.subscriptions set status = 'expired', updated_at = now()
+     where status = 'active' and expires_at <= now()
+    returning user_id, plan_id
+  )
+  insert into public.analytics_events (event, user_id, source, campaign, plan_id)
+  select 'subscription_expired', e.user_id, coalesce(ua.first_touch_source, 'unknown'), ua.first_touch_campaign, e.plan_id
+    from expired e left join public.user_attribution ua on ua.user_id = e.user_id;
+  get diagnostics n = row_count;
+  update public.payments set status = 'cancelled', updated_at = now(), reviewed_at = now(), reviewed_by = 'expired (not paid within 24 h)'
+   where status = 'initiated' and created_at < now() - interval '24 hours';
+  return n;
+end $$;
+
+revoke execute on function public.apply_verified_payment(uuid, numeric, text, text, text, uuid) from public, anon, authenticated;
+grant  execute on function public.apply_verified_payment(uuid, numeric, text, text, text, uuid) to service_role;
+revoke execute on function public.try_verify_payment(uuid) from public, anon, authenticated;
+revoke execute on function public.check_payment_status(uuid) from public, anon;
+grant  execute on function public.check_payment_status(uuid) to authenticated;

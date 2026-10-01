@@ -358,25 +358,34 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     LaunchedEffect(d.openOrder?.id) { if (order == null && activated == null) order = d.openOrder }
     val pending = submitted ?: d.payments.firstOrNull { it.status == "pending" }
 
-    // Most UPI apps don't report back for payments to a UPI ID, so we don't rely on that:
-    // the server activates the order when the money arrives, and we check it every 3 seconds.
+    // Final status always comes from the backend (check_payment_status), which activates a plan
+    // only after trusted verification. We ask it every 5 s for the first 10 minutes; after that
+    // the customer can tap "Check payment status" (the order stays open for 24 h).
+    var checking by remember { mutableStateOf(false) }
+    fun applyBackendStatus(p: Payment) {
+        when (p.status) {
+            "approved" -> { activated = p; order = null; noAnswer = false; busy = false; onSubmitted() }
+            "failed" -> { order = null; noAnswer = false; busy = false; error = "Payment failed. Please try again." }
+            "cancelled" -> { order = null; noAnswer = false; busy = false; error = "Payment cancelled. You can try again." }
+            else -> if (order?.id == p.id) order = p
+        }
+    }
+    fun checkNow(o: Payment) {
+        checking = true
+        scope.launch {
+            runCatching { Repo.checkPaymentStatus(o.id) }
+                .onSuccess { applyBackendStatus(it) }
+                .onFailure { error = it.friendly() }
+            checking = false
+        }
+    }
     LaunchedEffect(order?.id) {
         val o = order ?: return@LaunchedEffect
-        while (true) {
-            val p = runCatching { Repo.payment(o.id) }.getOrNull()
-            when {
-                p == null -> Unit
-                p.status == "approved" -> { activated = p; order = null; busy = false; onSubmitted(); return@LaunchedEffect }
-                p.status != "initiated" -> { order = null; busy = false; return@LaunchedEffect }
-            }
-            val age = runCatching { java.time.Duration.between(OffsetDateTime.parse(o.createdAt), OffsetDateTime.now()) }.getOrNull()
-            if (age != null && age.toMinutes() >= 20) {
-                order = null
-                error = "We didn't receive this payment. If money was debited, enter the UTR below."
-                showManual = true
-                return@LaunchedEffect
-            }
-            delay(3000)
+        repeat(120) {
+            delay(5000)
+            val p = runCatching { Repo.checkPaymentStatus(o.id) }.getOrNull() ?: return@repeat
+            applyBackendStatus(p)
+            if (p.status != "initiated") return@LaunchedEffect
         }
     }
 
@@ -406,19 +415,11 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             if (order == null && target.status == "initiated") order = target
             var lastError: Throwable? = null
             repeat(3) { attempt ->   // send it reliably: retry briefly on a bad connection
+                // The UPI app's answer is only recorded; the backend's verified status decides.
                 val sent = runCatching { Repo.reportUpiResult(target.id, response) }
                 sent.onSuccess { p ->
-                    when (p.status) {
-                        "approved" -> { activated = p; order = null; savedOrderId = null; noAnswer = false; onSubmitted() }
-                        "failed" -> {
-                            order = null
-                            savedOrderId = null
-                            noAnswer = false
-                            error = "Payment failed in your UPI app (${p.upiStatusLabel ?: "failed"}). " +
-                                "No money was taken for a plan — please try again."
-                        }
-                        else -> Unit // pending / no answer: keep waiting, we check every few seconds
-                    }
+                    if (p.status != "initiated") savedOrderId = null
+                    applyBackendStatus(p)
                     return@launch
                 }
                 lastError = sent.exceptionOrNull()
@@ -444,9 +445,9 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                     Icon(Icons.Default.CheckCircle, null, tint = Green)
                     Spacer(Modifier.width(12.dp))
                     Column {
-                        Text("Payment successful — ${p.planName ?: "plan"} is active!", style = MaterialTheme.typography.titleSmall)
+                        Text("Payment successful! Your subscription is now active.", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "${formatPrice(p.amount)} · UTR ${p.utr}\nEnjoy all Premium content right away.",
+                            "${p.planName ?: "Plan"} · ${formatPrice(p.amount)} · UTR ${p.utr}\nEnjoy all Premium content right away.",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(top = 4.dp),
                         )
@@ -479,6 +480,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                 waiting,
                 onPayAgain = { openUpiApp(d.settings, waiting) },
                 noAnswer = noAnswer,
+                checking = checking,
+                onCheck = { checkNow(waiting) },
                 onEnterUtr = { order = null; showManual = true; selected = d.plans.firstOrNull { it.id == waiting.planId } ?: selected },
                 onCancel = {
                     scope.launch { runCatching { Repo.cancelUpiPayment(waiting.id) } }
@@ -589,6 +592,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
 private fun WaitingForPaymentCard(
     order: Payment,
     noAnswer: Boolean,
+    checking: Boolean,
+    onCheck: () -> Unit,
     onPayAgain: () -> Unit,
     onEnterUtr: () -> Unit,
     onCancel: () -> Unit,
@@ -599,17 +604,20 @@ private fun WaitingForPaymentCard(
                 CircularProgressIndicator(Modifier.size(22.dp), color = Red, strokeWidth = 2.5.dp)
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    if (noAnswer) "Checking your payment…" else "Waiting for your payment",
+                    if (order.clientStatus == null && !noAnswer) "Waiting for your payment"
+                    else "Payment verification is pending",
                     style = MaterialTheme.typography.titleMedium,
                 )
             }
-            if (noAnswer) {
+            Text("Order ${order.reference}", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+            if (order.clientStatus != null || noAnswer) {
                 Text(
-                    "Your UPI app closed without telling us whether the payment went through. If you paid, " +
-                        "your plan starts automatically once it's confirmed. If you didn't pay, tap Cancel.",
+                    "We're checking your payment. Your plan starts as soon as the payment is verified — " +
+                        "this usually takes a few seconds. If you didn't pay, tap Cancel.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Amber,
                 )
+                SecondaryButton(if (checking) "Checking…" else "Check payment status", onCheck, enabled = !checking)
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(formatPrice(order.amount), fontFamily = Poppins, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Color.White)
@@ -621,7 +629,7 @@ private fun WaitingForPaymentCard(
                     "after paying, just come back to Streams.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            PrimaryButton(if (noAnswer) "Try paying again" else "Open UPI app", onPayAgain)
+            if (order.clientStatus == null) PrimaryButton(if (noAnswer) "Try paying again" else "Open UPI app", onPayAgain)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "Paid but not active? Enter UTR",
@@ -690,11 +698,13 @@ private fun PlanCard(plan: Plan, selected: Boolean, popular: Boolean, onClick: (
 @Composable
 private fun PaymentRow(p: Payment) {
     val (label, color) = when (p.status) {
-        "approved" -> (if (p.isAuto) "Paid" else "Approved") to Green
+        "approved" -> "Success" to Green
         "rejected" -> "Rejected" to MaterialTheme.colorScheme.error
         "revoked" -> "Cancelled" to MaterialTheme.colorScheme.error
         "failed" -> "Failed" to MaterialTheme.colorScheme.error
-        else -> "Waiting" to Amber
+        "cancelled" -> "Cancelled" to TextMuted
+        "pending" -> "In review" to Amber
+        else -> "Pending" to Amber
     }
     Row(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(Surface1).padding(14.dp),
@@ -702,7 +712,8 @@ private fun PaymentRow(p: Payment) {
     ) {
         Column(Modifier.weight(1f)) {
             Text("${p.planName ?: "Plan"} · ${formatPrice(p.amount)}", style = MaterialTheme.typography.titleSmall)
-            Text("${formatDate(p.createdAt)} · UTR ${p.utr}", style = MaterialTheme.typography.bodySmall)
+            Text("${formatDate(p.createdAt)} · Order ${p.reference}", style = MaterialTheme.typography.bodySmall)
+            p.txnId?.let { Text("UTR $it", style = MaterialTheme.typography.bodySmall) }
             p.adminNote?.takeIf { p.status == "rejected" || p.status == "revoked" }?.let {
                 Text("Reason: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
@@ -722,8 +733,7 @@ private fun upiIntent(s: PaymentSettings, order: Payment): Intent {
         .scheme("upi").authority("pay")
         .appendQueryParameter("pa", s.upiId)
         .appendQueryParameter("pn", s.payeeName)
-        // Same fields as v1.1.33, which worked with every UPI app. Adding tr/mc made some apps
-        // decline the payment, so the order number travels only in the note (tn).
+        .appendQueryParameter("tr", order.reference) // backend-generated order id, echoed back as txnRef
         .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, order.amount ?: 0.0))
         .appendQueryParameter("cu", "INR")
         .appendQueryParameter("tn", "Streams ${order.reference}")
