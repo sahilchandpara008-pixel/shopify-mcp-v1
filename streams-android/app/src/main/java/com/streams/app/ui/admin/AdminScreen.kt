@@ -600,13 +600,6 @@ private fun SettingsTab() {
                 Text("Customers pay to this UPI ID. Changes apply instantly.", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(upi, { upi = it.trim() }, label = { Text("UPI ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(payee, { payee = it }, label = { Text("Payee name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(
-                    mcc, { v -> mcc = v.filter { it.isDigit() }.take(4) },
-                    label = { Text("Merchant code (MCC, optional)") },
-                    supportingText = { Text("4 digits from your merchant UPI provider (BharatPe, Paytm / PhonePe Business)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 BusyButton("Save", busy) {
                     if (!upi.contains("@") || payee.isBlank()) {
                         Toast.makeText(context, "Enter a valid UPI ID (like name@bank) and a name", Toast.LENGTH_LONG).show(); return@BusyButton

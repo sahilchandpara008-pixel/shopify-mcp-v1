@@ -701,8 +701,8 @@ private fun upiIntent(s: PaymentSettings, order: Payment): Intent {
         .scheme("upi").authority("pay")
         .appendQueryParameter("pa", s.upiId)
         .appendQueryParameter("pn", s.payeeName)
-        .apply { s.merchantCode?.takeIf { it.isNotBlank() }?.let { appendQueryParameter("mc", it.trim()) } }
-        .appendQueryParameter("tr", order.reference) // our order number — the UPI app echoes it back as txnRef
+        // Same fields as v1.1.33, which worked with every UPI app. Adding tr/mc made some apps
+        // decline the payment, so the order number travels only in the note (tn).
         .appendQueryParameter("am", "%.2f".format(java.util.Locale.US, order.amount ?: 0.0))
         .appendQueryParameter("cu", "INR")
         .appendQueryParameter("tn", "Streams ${order.reference}")
