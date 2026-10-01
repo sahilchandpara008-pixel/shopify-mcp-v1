@@ -166,6 +166,11 @@ object Repo {
             put("p_payment_id", paymentId); put("p_response", response)
         }).decodeAs()
 
+    /** Customer closes an unfinished order (UPI app gave no answer and they did not pay). */
+    suspend fun cancelUpiPayment(paymentId: String) {
+        supabase.postgrest.rpc("cancel_upi_payment", buildJsonObject { put("p_payment_id", paymentId) })
+    }
+
     /** Step 2: forward the UPI app's response; on Status=SUCCESS the plan is applied immediately. */
     suspend fun confirmUpiPayment(paymentId: String, response: String): Payment =
         supabase.postgrest.rpc("confirm_upi_payment", buildJsonObject {

@@ -207,7 +207,7 @@ private fun OverviewTab() {
 private fun PaymentsTab() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Failed" to "failed", "Revoked" to "revoked", "All" to null)
+    val filters = mapOf("Waiting" to "pending", "Approved" to "approved", "Rejected" to "rejected", "Failed" to "failed", "Not completed" to "initiated", "Revoked" to "revoked", "All" to null)
     var filter by rememberSaveable { mutableStateOf("Waiting") }
     var busyId by remember { mutableStateOf<String?>(null) }
     var rejecting by remember { mutableStateOf<Payment?>(null) }
@@ -239,6 +239,12 @@ private fun PaymentsTab() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (p.bankVerified) Green else Amber,
                             )
+                        }
+                        p.upiStatusLabel?.let {
+                            Text("UPI app status: $it", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (p.status == "initiated") {
+                            Text("Started, not completed — no final answer yet", style = MaterialTheme.typography.bodySmall, color = Amber)
                         }
                         if (p.status == "rejected" || p.status == "revoked") p.adminNote?.let { Text("Note: $it", style = MaterialTheme.typography.bodySmall) }
                         if (p.status == "pending") {

@@ -125,7 +125,8 @@ fun HomeScreen(nav: NavController) {
             is Load.Err -> ErrorState(s.message, load.reload)
             is Load.Ok -> {
                 val all = s.data.titles.filterTier(filter)
-                val featured = (all.filter { it.featured }.ifEmpty { all.sortedByDescending { it.viewCount } }).take(5)
+                // Hero banner shows only titles the admin marked as Featured (☆) — never automatic.
+                val featured = all.filter { it.featured }.take(5)
                 val channelName = { t: Title -> s.data.channels.firstOrNull { it.id == t.channelId }?.name }
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
                     item(key = "hero") {

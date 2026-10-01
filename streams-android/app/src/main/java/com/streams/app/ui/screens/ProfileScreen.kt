@@ -349,6 +349,8 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     var submitted by remember { mutableStateOf<Payment?>(null) }
     var activated by remember { mutableStateOf<Payment?>(null) }
     var showManual by remember { mutableStateOf(false) }
+    // The UPI app closed without telling us the result (some apps don't, or the user backed out).
+    var noAnswer by remember { mutableStateOf(false) }
     // The order created on the server just before the UPI app was opened (exact plan price);
     // the incoming bank credit of that amount activates it.
     var order by remember { mutableStateOf<Payment?>(null) }
@@ -383,15 +385,21 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         busy = false
         val o = order ?: return@rememberLauncherForActivityResult
-        val response = upiResponse(result.data) ?: return@rememberLauncherForActivityResult // backed out: keep waiting
+        val fromApp = upiResponse(result.data)
+        // No answer from the UPI app: still record it on the order (admins see it), keep checking
+        // for a few minutes in case the payment did go through, and let the customer cancel.
+        val response = fromApp ?: "Status=NO_RESPONSE&resultCode=${result.resultCode}"
+        noAnswer = fromApp == null
         scope.launch {
             runCatching { Repo.reportUpiResult(o.id, response) }
                 .onSuccess { p ->
                     when (p.status) {
-                        "approved" -> { activated = p; order = null; onSubmitted() }
+                        "approved" -> { activated = p; order = null; noAnswer = false; onSubmitted() }
                         "failed" -> {
                             order = null
-                            error = "Payment failed in your UPI app. No plan was bought — please try again."
+                            noAnswer = false
+                            error = "Payment failed in your UPI app (${p.upiStatusLabel ?: "failed"}). " +
+                                "No money was taken for a plan — please try again."
                         }
                         else -> Unit // pending: keep waiting, we check every few seconds
                     }
@@ -449,7 +457,12 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             WaitingForPaymentCard(
                 waiting,
                 onPayAgain = { openUpiApp(d.settings, waiting) },
+                noAnswer = noAnswer,
                 onEnterUtr = { order = null; showManual = true; selected = d.plans.firstOrNull { it.id == waiting.planId } ?: selected },
+                onCancel = {
+                    scope.launch { runCatching { Repo.cancelUpiPayment(waiting.id) } }
+                    order = null; noAnswer = false; error = null
+                },
             )
             return@Column
         }
@@ -552,13 +565,30 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
 }
 
 @Composable
-private fun WaitingForPaymentCard(order: Payment, onPayAgain: () -> Unit, onEnterUtr: () -> Unit) {
+private fun WaitingForPaymentCard(
+    order: Payment,
+    noAnswer: Boolean,
+    onPayAgain: () -> Unit,
+    onEnterUtr: () -> Unit,
+    onCancel: () -> Unit,
+) {
     Card(padding = 18.dp) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(22.dp), color = Red, strokeWidth = 2.5.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("Waiting for your payment", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (noAnswer) "Checking your payment…" else "Waiting for your payment",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            if (noAnswer) {
+                Text(
+                    "Your UPI app closed without telling us whether the payment went through. If you paid, " +
+                        "your plan starts automatically once it's confirmed. If you didn't pay, tap Cancel.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Amber,
+                )
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(formatPrice(order.amount), fontFamily = Poppins, fontWeight = FontWeight.Bold, fontSize = 30.sp, color = Color.White)
@@ -570,13 +600,21 @@ private fun WaitingForPaymentCard(order: Payment, onPayAgain: () -> Unit, onEnte
                     "after paying, just come back to Streams.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            PrimaryButton("Open UPI app", onPayAgain)
-            Text(
-                "Paid more than 10 minutes ago and still waiting? Enter UTR",
-                style = MaterialTheme.typography.labelLarge,
-                color = TextMuted,
-                modifier = Modifier.clickable(onClick = onEnterUtr).padding(vertical = 4.dp),
-            )
+            PrimaryButton(if (noAnswer) "Try paying again" else "Open UPI app", onPayAgain)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Paid but not active? Enter UTR",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TextMuted,
+                    modifier = Modifier.weight(1f).clickable(onClick = onEnterUtr).padding(vertical = 4.dp),
+                )
+                Text(
+                    "Cancel",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.clickable(onClick = onCancel).padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+                )
+            }
         }
     }
 }

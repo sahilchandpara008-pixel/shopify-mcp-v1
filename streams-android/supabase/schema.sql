@@ -1643,3 +1643,21 @@ alter function public.parse_install_referrer(text) set search_path = public;
 alter function public.parse_upi_response(text) set search_path = public;
 alter function public.plan_interval(public.subscription_plans) set search_path = public;
 revoke execute on function public.is_meta_user() from anon;
+-- ---------------------------------------------------------------------
+-- 20. Customer cancels an unfinished UPI order (UPI app gave no answer and
+--     they did not pay). The order is closed as failed and kept for the record.
+-- ---------------------------------------------------------------------
+create or replace function public.cancel_upi_payment(p_payment_id uuid)
+returns public.payments language plpgsql security definer set search_path = public as $$
+declare pay public.payments;
+begin
+  if auth.uid() is null then raise exception 'Please sign in first'; end if;
+  update public.payments
+     set status = 'failed', reviewed_at = now(), reviewed_by = 'cancelled by customer'
+   where id = p_payment_id and user_id = auth.uid() and status = 'initiated'
+  returning * into pay;
+  if not found then select * into pay from public.payments where id = p_payment_id and user_id = auth.uid(); end if;
+  return pay;
+end $$;
+revoke execute on function public.cancel_upi_payment(uuid) from public, anon;
+grant  execute on function public.cancel_upi_payment(uuid) to authenticated;

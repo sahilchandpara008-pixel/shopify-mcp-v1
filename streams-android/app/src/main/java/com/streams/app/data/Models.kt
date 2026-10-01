@@ -108,7 +108,21 @@ data class Payment(
     @SerialName("reviewed_by") val reviewedBy: String? = null,
     /** Set when the money was seen arriving (bank SMS / UPI app notification on the owner's phone). */
     @SerialName("bank_credit_id") val bankCreditId: String? = null,
+    /** Exactly what the UPI app returned ("txnId=..&Status=SUCCESS|FAILURE|..&responseCode=.."). */
+    @SerialName("upi_response") val upiResponse: String? = null,
 ) {
+    private fun upiField(key: String) = upiResponse?.split('&')
+        ?.firstOrNull { it.substringBefore('=').equals(key, ignoreCase = true) }
+        ?.substringAfter('=', "")?.takeIf { it.isNotBlank() }
+
+    /** e.g. "SUCCESS", "FAILURE (U30)", "NO RESPONSE" — the payment status reported by the UPI app. */
+    val upiStatusLabel: String?
+        get() {
+            val st = upiField("Status")?.uppercase()?.replace('_', ' ') ?: return null
+            val code = upiField("responseCode")?.takeIf { st != "NO RESPONSE" }
+            return if (code != null) "$st ($code)" else st
+        }
+
     val isAuto get() = method == "upi_auto"
     val bankVerified get() = bankCreditId != null
     /** The number to look for in the bank statement. */
