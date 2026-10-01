@@ -65,6 +65,7 @@ import coil3.compose.AsyncImage
 import com.streams.app.data.Channel
 import com.streams.app.data.Episode
 import com.streams.app.data.Repo
+import com.streams.app.data.Tags
 import com.streams.app.data.Tier
 import com.streams.app.data.Title
 import com.streams.app.data.friendly
@@ -79,7 +80,9 @@ import com.streams.app.ui.theme.TextMuted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.put
 
 private val tierHelp = listOf(
@@ -112,6 +115,10 @@ fun ContentEditorScreen(nav: NavController, titleId: String?) {
     var video by remember { mutableStateOf<Uri?>(null) }
     var tier by remember { mutableStateOf(Tier.FREE) }
     var published by remember { mutableStateOf(false) }   // new uploads are drafts
+    // Content tags (titles.tags). STREAMS_SPECIAL: only returned by the server to accounts
+    // acquired through a Meta ad. NEW: "new" label. Featured/Premium keep their own settings.
+    var special by remember { mutableStateOf(false) }
+    var isNewTag by remember { mutableStateOf(false) }
 
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -125,6 +132,7 @@ fun ContentEditorScreen(nav: NavController, titleId: String?) {
                 existing = t
                 kind = t.kind; name = t.name; description = t.description; channelId = t.channelId
                 tier = t.tier; published = t.published
+                special = Tags.STREAMS_SPECIAL in t.tags; isNewTag = Tags.NEW in t.tags
             }
         }.onFailure { error = it.friendly() }
         loaded = true
@@ -211,7 +219,11 @@ fun ContentEditorScreen(nav: NavController, titleId: String?) {
                 }
             }
 
-            Step(8, "Publish")
+            Step(8, "Tags")
+            SwitchRow("STREAMS_SPECIAL — shown only to people who installed from a Meta ad", special) { special = it }
+            SwitchRow("NEW", isNewTag) { isNewTag = it }
+
+            Step(9, "Publish")
             SwitchRow(if (published) "LIVE — visible in the app" else "DRAFT — hidden from customers", published) { published = it }
 
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -239,6 +251,10 @@ fun ContentEditorScreen(nav: NavController, titleId: String?) {
                             put("channel_id", channelId)
                             put("tier", tier)
                             put("published", published)
+                            putJsonArray("tags") {
+                                if (special) add(Tags.STREAMS_SPECIAL)
+                                if (isNewTag) add(Tags.NEW)
+                            }
                             coverPath?.let { put("cover_path", it) }
                             trailerPath?.let { put("trailer_path", it) }
                             if (kind == "movie") {

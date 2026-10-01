@@ -88,6 +88,14 @@
   .step i { font-style: normal; width: 22px; height: 22px; border-radius: 50%; background: var(--red); display: inline-grid; place-items: center; font-size: 12px; }
   .tier { display: flex; gap: 10px; padding: 10px; border-radius: 10px; background: var(--bg); margin-top: 8px; cursor: pointer; border: 1px solid transparent; }
   .tier.on { border-color: var(--red); }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 10px 0 6px; }
+  .filters label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; margin: 0; }
+  .filters input, .filters select { min-width: 120px; }
+  .tablewrap { overflow-x: auto; }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .tbl th, .tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .tbl th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .tbl tr.click { cursor: pointer; } .tbl tr.click:hover { background: rgba(255,255,255,.04); }
   .tier input { margin-top: 4px; }
   .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .seg button { flex: 1; padding: 9px; background: var(--bg); color: var(--muted); border: 0; cursor: pointer; }
@@ -309,7 +317,7 @@ sb.auth.onAuthStateChange(evt => { if (evt === "PASSWORD_RECOVERY") show("resetV
 
 // ---------------------------------------------------------------- tabs
 function tabList() {
-  const t = ["Overview", "Payments", "Content", "Channels", "Campaigns"];
+  const t = ["Overview", "Attribution", "Payments", "Content", "Channels", "Campaigns"];
   if (me.role === "owner") t.push("Team", "Settings");
   return t;
 }
@@ -324,7 +332,7 @@ function renderTabs() {
   if (!tabList().includes(currentTab)) currentTab = "Overview";
   const main = $("main");
   main.innerHTML = `<div class="empty">Loading…</div>`;
-  const fn = { Overview, Payments, Content, Channels, Campaigns, Team, Settings }[currentTab];
+  const fn = { Overview, Attribution, Payments, Content, Channels, Campaigns, Team, Settings }[currentTab];
   fn(main).catch(err => { main.innerHTML = `<div class="err">${esc(friendly(err))}</div> <button class="btn" onclick="renderTabs()">Try again</button>`; });
 }
 
@@ -339,6 +347,100 @@ async function Overview(main) {
   ];
   main.innerHTML = `<h2>Overview</h2><div class="grid">${cards.map(([l, v]) =>
     `<div class="stat"><b>${esc(v)}</b><span class="muted small">${esc(l)}</span></div>`).join("")}</div>`;
+}
+
+// ---------------------------------------------------------------- Attribution
+const SRC_LABEL = { meta: "Meta", organic: "Organic", direct: "Direct", unknown: "Unknown", other: "Other" };
+const srcName = s => SRC_LABEL[s] || "Unknown";
+const pct = (a, b) => b > 0 ? Math.round(a * 100 / b) + "%" : "—";
+let attrF = { from: "", to: "", source: "", campaign: "", plan: "", purchased: "", search: "" };
+
+async function Attribution(main) {
+  const plans = await must(sb.from("subscription_plans").select("id,name").order("sort_order"));
+  const iso = d => d ? new Date(d + "T00:00:00").toISOString() : null;
+  const isoEnd = d => d ? new Date(new Date(d + "T00:00:00").getTime() + 86400000).toISOString() : null;
+  const f = attrF;
+  const [rep, users] = await Promise.all([
+    must(sb.rpc("admin_attribution_report", { p_from: iso(f.from), p_to: isoEnd(f.to), p_source: f.source || null,
+      p_campaign: f.campaign || null, p_plan: f.plan || null })),
+    must(sb.rpc("admin_attribution_users", { p_from: iso(f.from), p_to: isoEnd(f.to), p_source: f.source || null,
+      p_campaign: f.campaign || null, p_purchased: f.purchased === "" ? null : f.purchased === "yes",
+      p_plan: f.plan || null, p_search: f.search || null, p_limit: 300 })),
+  ]);
+  const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`;
+  const rowHtml = r => `<tr ${r.campaign ? `class="click" data-c="${esc(r.campaign)}"` : ""}>
+      <td>${esc(r.campaign || srcName(r.source))}${r.campaign ? `<div class="muted small">${esc(srcName(r.source))}</div>` : ""}</td>
+      <td>${r.installs}</td><td>${r.registrations}</td><td>${r.purchasers}</td><td><b>${rupees(r.revenue)}</b></td>
+      <td class="small">${pct(r.registrations, r.installs)} → ${pct(r.purchasers, r.registrations)}</td></tr>`;
+  const head = first => `<tr><th>${first}</th><th>Installs</th><th>Registrations</th><th>Purchasers</th><th>Revenue</th><th>Install→Reg→Purchase</th></tr>`;
+  main.innerHTML = `<h2>Attribution</h2>
+    <p class="muted small">Where users came from (Google Play Install Referrer), what they bought and how campaigns perform.
+      Installs come only from Play Store installs; APKs shared directly show as Unknown. Purchases count verified (approved) payments only.</p>
+    <div class="filters">
+      <label>From <input type="date" id="aFrom" value="${esc(f.from)}"></label>
+      <label>To <input type="date" id="aTo" value="${esc(f.to)}"></label>
+      <label>Source <select id="aSrc">${opt("", "All", f.source)}${Object.entries(SRC_LABEL).map(([k, v]) => opt(k, v, f.source)).join("")}</select></label>
+      <label>Campaign <input type="text" id="aCamp" value="${esc(f.campaign)}" placeholder="any"></label>
+      <label>Plan <select id="aPlan">${opt("", "All", f.plan)}${plans.map(p => opt(p.id, p.name, f.plan)).join("")}</select></label>
+      <label>Purchase <select id="aBuy">${opt("", "Everyone", f.purchased)}${opt("yes", "Purchased", f.purchased)}${opt("no", "Not purchased", f.purchased)}</select></label>
+      <label>E-mail <input type="text" id="aSearch" value="${esc(f.search)}" placeholder="search"></label>
+      <button class="btn primary" id="aApply">Apply</button> <button class="btn" id="aReset">Reset</button>
+    </div>
+    <h3>By source</h3>
+    <div class="tablewrap"><table class="tbl">${head("Source")}${rep.by_source.map(rowHtml).join("") || `<tr><td colspan="6" class="muted">No data in this range yet.</td></tr>`}</table></div>
+    <h3>Campaigns</h3>
+    <div class="tablewrap"><table class="tbl" id="campTbl">${head("Campaign")}${rep.campaigns.map(rowHtml).join("") || `<tr><td colspan="6" class="muted">No campaign data yet — it appears when people install from a tracked Play Store link.</td></tr>`}</table></div>
+    <h3>Users <span class="muted small">(${users.length}${users.length >= 300 ? "+" : ""})</span></h3>
+    <div class="tablewrap"><table class="tbl" id="userTbl"><tr><th>User</th><th>Joined</th><th>Source</th><th>Campaign</th><th>Plan</th><th>Revenue</th></tr>
+      ${users.map(u => `<tr class="click" data-u="${esc(u.user_id)}"><td>${esc(u.email || u.user_id)}</td><td class="small">${esc(when(u.registered_at))}</td>
+        <td>${esc(srcName(u.source))}</td><td>${esc(u.campaign || "—")}</td>
+        <td>${esc(u.plan_name || "—")}${u.sub_status ? `<div class="muted small">${esc(u.sub_status)}</div>` : ""}</td><td>${rupees(u.revenue)}</td></tr>`).join("")
+        || `<tr><td colspan="6" class="muted">No users match these filters.</td></tr>`}</table></div>
+    <h3>Meta campaign link builder</h3>
+    <div style="max-width:560px">
+      <p class="muted small">Use the generated Play Store link as the destination of a Meta ad. Google Play passes the
+        <code>referrer</code> part to the app after install; the app reports it and the server records the campaign.</p>
+      <label>Campaign (utm_campaign)</label><input type="text" id="lCamp" placeholder="streams_special">
+      <label>Ad / content (utm_content)</label><input type="text" id="lCont" placeholder="ad_01">
+      <label>Source</label><select id="lSrc">${opt("meta", "meta", "meta")}${opt("facebook", "facebook", "")}${opt("instagram", "instagram", "")}</select>
+      <div style="height:10px"></div><button class="btn primary" id="lMake">Create link</button>
+      <textarea id="lOut" readonly rows="3" style="width:100%;margin-top:10px" placeholder="Your link appears here"></textarea>
+    </div>`;
+
+  const read = () => ({ from: $("aFrom").value, to: $("aTo").value, source: $("aSrc").value, campaign: $("aCamp").value.trim(),
+    plan: $("aPlan").value, purchased: $("aBuy").value, search: $("aSearch").value.trim() });
+  $("aApply").onclick = () => { attrF = read(); renderTabs(); };
+  $("aReset").onclick = () => { attrF = { from: "", to: "", source: "", campaign: "", plan: "", purchased: "", search: "" }; renderTabs(); };
+  main.querySelectorAll("#campTbl tr[data-c]").forEach(tr => tr.onclick = () => { attrF = { ...read(), campaign: tr.dataset.c }; renderTabs(); });
+  main.querySelectorAll("#userTbl tr[data-u]").forEach(tr => tr.onclick = () => userDetail(tr.dataset.u));
+  $("lMake").onclick = () => {
+    const clean = v => v.trim().replace(/[^A-Za-z0-9_.-]/g, "_");
+    const camp = clean($("lCamp").value), cont = clean($("lCont").value);
+    if (!camp) { toast("Enter a campaign name"); return; }
+    const ref = `utm_source=${$("lSrc").value}&utm_medium=paid_social&utm_campaign=${camp}` + (cont ? `&utm_content=${cont}` : "");
+    $("lOut").value = `https://play.google.com/store/apps/details?id=com.streams.app&referrer=${encodeURIComponent(ref)}`;
+    $("lOut").select();
+  };
+}
+
+async function userDetail(id) {
+  openDialog("User", `<div class="empty">Loading…</div>`, [{ label: "Close", onClick: () => dlg.close() }]);
+  try {
+    const d = await must(sb.rpc("admin_user_detail", { p_user_id: id }));
+    const a = d.attribution || {}, s = d.subscription || {};
+    const line = (k, v) => `<div class="row small"><span class="muted" style="min-width:130px">${esc(k)}</span><span>${esc(v ?? "—")}</span></div>`;
+    $("dlgBody").innerHTML =
+      line("User ID", d.user_id) + line("E-mail", d.email) + line("Registered", when(d.registered_at)) +
+      line("Acquisition", srcName(a.first_touch_source)) + line("Campaign", a.first_touch_campaign) +
+      line("Ad / content", a.first_touch_content) + line("First touch", when(a.first_touch_at)) +
+      line("Last touch", a.last_touch_at ? `${when(a.last_touch_at)} · ${srcName(a.last_touch_source)}` : null) +
+      line("Subscription", s.status) + line("Current plan", s.plan) + line("Expires", when(s.expires_at)) +
+      line("Total revenue", rupees(d.revenue)) +
+      `<h3 style="margin-top:14px">Purchases</h3>` +
+      (d.payments.length ? d.payments.map(p => `<div class="small">${esc(when(p.created_at))} · ${esc(p.plan)} · ${rupees(p.amount)} ·
+        <b>${esc(p.status)}</b>${p.attribution_source ? ` · ${esc(srcName(p.attribution_source))}${p.attribution_campaign ? " / " + esc(p.attribution_campaign) : ""}` : ""}
+        <span class="muted">· UTR ${esc(p.utr)}</span></div>`).join("") : `<div class="muted small">None</div>`);
+  } catch (err) { $("dlgBody").innerHTML = `<div class="err">${esc(friendly(err))}</div>`; }
 }
 
 // ---------------------------------------------------------------- Payments
@@ -428,6 +530,8 @@ async function Content(main) {
         <div class="row" style="margin-top:6px">
           <span class="badge click ${t.published ? "live" : "draft"}" data-a="pub">${t.published ? "LIVE" : "DRAFT"}</span>
           <span class="badge click ${t.tier}" data-a="tier">${TIERS[t.tier].label.toUpperCase()}</span>
+          <span class="badge click ${(t.tags || []).includes("STREAMS_SPECIAL") ? "premium" : "draft"}" data-a="special"
+                title="STREAMS_SPECIAL: shown only to people who installed from a Meta ad">${(t.tags || []).includes("STREAMS_SPECIAL") ? "★ STREAMS_SPECIAL" : "+ SPECIAL"}</span>
         </div>
       </div>
       <button class="iconbtn" data-a="feat" title="Feature on Home">${t.featured ? "★" : "☆"}</button>
@@ -436,6 +540,11 @@ async function Content(main) {
     const act = async (fn) => { try { await fn(); } catch (err) { toast(friendly(err)); } renderTabs(); };
     el.querySelector('[data-a="pub"]').onclick = () => act(() => must(sb.from("titles").update({ published: !t.published }).eq("id", t.id)));
     el.querySelector('[data-a="tier"]').onclick = () => act(() => must(sb.from("titles").update({ tier: nextTier(t.tier) }).eq("id", t.id)));
+    el.querySelector('[data-a="special"]').onclick = () => act(() => {
+      const tags = (t.tags || []).filter(x => x !== "STREAMS_SPECIAL");
+      if (!(t.tags || []).includes("STREAMS_SPECIAL")) tags.push("STREAMS_SPECIAL");
+      return must(sb.from("titles").update({ tags }).eq("id", t.id));
+    });
     el.querySelector('[data-a="feat"]').onclick = () => act(() => must(sb.from("titles").update({ featured: !t.featured }).eq("id", t.id)));
     el.querySelector('[data-a="edit"]').onclick = () => editTitle(t, channels);
     el.querySelector('[data-a="del"]').onclick = () => {
@@ -478,7 +587,10 @@ function editTitle(t, channels) {
     <div class="step"><i>7</i>Who can watch</div>
     <div id="tierBox">${Object.entries(TIERS).map(([k, v]) =>
       `<div class="tier" data-t="${k}"><input type="radio" name="tier" value="${k}"><div class="small">${esc(v.help)}</div></div>`).join("")}</div>
-    <div class="step"><i>8</i>Publish</div>
+    <div class="step"><i>8</i>Tags</div>
+    <label class="switch"><input type="checkbox" id="fSpecial" ${(t?.tags || []).includes("STREAMS_SPECIAL") ? "checked" : ""}><span>STREAMS_SPECIAL — shown only to people who installed from a Meta ad</span></label>
+    <label class="switch"><input type="checkbox" id="fNew" ${(t?.tags || []).includes("NEW") ? "checked" : ""}><span>NEW</span></label>
+    <div class="step"><i>9</i>Publish</div>
     <label class="switch"><input type="checkbox" id="fPub" ${t?.published ? "checked" : ""}><span id="pubLabel"></span></label>
     <p class="muted small">Free Supabase plan: max 50 MB per file. Upgrade to Pro for full-length videos.</p>
     <div id="fMsg"></div>
@@ -521,6 +633,7 @@ async function saveTitle(btn, t, st) {
     const fields = {
       kind: st.kind, name, description: $("fDesc").value.trim(),
       channel_id: $("fChannel").value || null, tier: st.tier, published: $("fPub").checked,
+      tags: [...($("fSpecial").checked ? ["STREAMS_SPECIAL"] : []), ...($("fNew").checked ? ["NEW"] : [])],
     };
     if (cover) { step("fCover", "Uploading thumbnail…"); fields.cover_path = await uploadFile("images", "covers", cover, v => $("fCoverProg").value = v); }
     if (trailer) { step("fTrailer", "Uploading trailer…"); fields.trailer_path = await uploadFile("videos", "trailers", trailer, v => $("fTrailerProg").value = v); }

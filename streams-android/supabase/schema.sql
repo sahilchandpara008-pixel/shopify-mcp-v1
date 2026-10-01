@@ -1087,3 +1087,559 @@ end $$;
 revoke execute on function public.report_upi_result(uuid, text) from public, anon;
 grant execute on function public.report_upi_result(uuid, text) to authenticated;
 revoke execute on function public.parse_upi_response(text) from public, anon;
+-- ---------------------------------------------------------------------
+-- 19. ACQUISITION ATTRIBUTION, STREAMS_SPECIAL CONTENT, PURCHASE ATTRIBUTION
+--     and ANALYTICS EVENTS
+--
+--   Install (device)  → attribution_installs   one row per app install, written from the
+--                                              Google Play Install Referrer (record_install)
+--   Account (user)    → user_attribution       first touch (never overwritten) + last touch,
+--                                              linked on sign-in (attribute_user)
+--   Content           → titles.tags            STREAMS_SPECIAL titles are only returned by
+--                                              the database to Meta-acquired accounts
+--   Purchases         → payments.attribution_* snapshot of the buyer's first-touch source,
+--                                              taken when a payment is verified/approved
+--   Events            → analytics_events       written only through log_event / triggers
+--
+--   Nobody but admins can read these tables, and nobody can write them directly:
+--   all writes go through the SECURITY DEFINER functions below, which parse and
+--   validate the referrer on the server.
+-- ---------------------------------------------------------------------
+
+-- ---------- helpers ----------------------------------------------------
+create or replace function public.url_decode(p text)
+returns text language plpgsql immutable as $$
+declare r bytea := ''; i int := 1; n int; c text;
+begin
+  if p is null then return null; end if;
+  n := length(p);
+  while i <= n loop
+    c := substr(p, i, 1);
+    if c = '%' and i + 2 <= n and substr(p, i + 1, 2) ~ '^[0-9A-Fa-f]{2}$' then
+      r := r || decode(substr(p, i + 1, 2), 'hex'); i := i + 3;
+    elsif c = '+' then
+      r := r || '\x20'::bytea; i := i + 1;
+    else
+      r := r || convert_to(c, 'UTF8'); i := i + 1;
+    end if;
+  end loop;
+  return convert_from(r, 'UTF8');
+exception when others then
+  return p;
+end $$;
+
+-- Keep campaign/ad names readable but harmless.
+create or replace function public.clean_utm(p text)
+returns text language sql immutable as $$
+  select nullif(left(trim(regexp_replace(coalesce(p, ''), '[^A-Za-z0-9 _.:|()-]', '', 'g')), 100), '')
+$$;
+
+-- Play Install Referrer string → {source, medium, campaign, content, term}.
+--   source is one of: meta | organic | direct | other | unknown
+create or replace function public.parse_install_referrer(p_referrer text)
+returns jsonb language plpgsql immutable as $$
+declare
+  ref text := trim(coalesce(p_referrer, ''));
+  kv  text;
+  f   jsonb := '{}';
+  s   text; m text; camp text; cont text; term text;
+  src text;
+begin
+  if ref = '' then
+    return jsonb_build_object('source', 'unknown');
+  end if;
+  -- Some links encode the whole referrer once more ("utm_source%3Dmeta%26...").
+  if position('=' in ref) = 0 and ref ilike '%\%3D%' then ref := public.url_decode(ref); end if;
+  foreach kv in array string_to_array(left(ref, 1000), '&') loop
+    if position('=' in kv) > 0 then
+      f := f || jsonb_build_object(lower(trim(split_part(kv, '=', 1))),
+                                   public.url_decode(substr(kv, position('=' in kv) + 1)));
+    end if;
+  end loop;
+
+  s    := lower(coalesce(f ->> 'utm_source', ''));
+  m    := public.clean_utm(f ->> 'utm_medium');
+  camp := public.clean_utm(f ->> 'utm_campaign');
+  term := public.clean_utm(f ->> 'utm_term');
+  -- Meta's own app-install ads put an encrypted JSON blob in utm_content; never store it as a name.
+  cont := case when left(trim(coalesce(f ->> 'utm_content', '')), 1) = '{' then null
+               else public.clean_utm(f ->> 'utm_content') end;
+
+  src := case
+    when s in ('meta', 'facebook', 'fb', 'instagram', 'ig', 'an', 'audience_network', 'messenger', 'threads')
+      or s like '%facebook.com%' or s like '%instagram.com%'                      then 'meta'
+    when s = 'google-play' and lower(coalesce(f ->> 'utm_medium', '')) = 'organic' then 'organic'
+    when s in ('', '(not set)', '(not%20set)', '(direct)', 'direct')                then 'direct'
+    else 'other'
+  end;
+  -- Meta's generic app-install campaign label is not a campaign name.
+  if src = 'meta' and lower(coalesce(camp, '')) in ('fb4a', 'ig4a') then camp := null; end if;
+
+  return jsonb_build_object('source', src, 'medium', m, 'campaign', camp, 'content', cont, 'term', term,
+                            'utm_source', public.clean_utm(f ->> 'utm_source'));
+end $$;
+
+-- ---------- tables -----------------------------------------------------
+create table if not exists public.attribution_installs (
+  install_id        uuid primary key,                 -- random id the app creates once per install
+  referrer_status   text not null check (referrer_status in ('ok', 'not_supported', 'unavailable', 'error')),
+  install_referrer  text,                             -- raw Play referrer (max 1000 chars)
+  source            text not null default 'unknown' check (source in ('meta', 'organic', 'direct', 'other', 'unknown')),
+  utm_source        text,
+  medium            text,
+  campaign          text,
+  content           text,
+  term              text,
+  referrer_click_at timestamptz,
+  install_begin_at  timestamptz,
+  first_user_id     uuid references auth.users(id) on delete set null,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+create index if not exists attribution_installs_source_idx   on public.attribution_installs (source, created_at);
+create index if not exists attribution_installs_campaign_idx on public.attribution_installs (campaign);
+alter table public.attribution_installs enable row level security;
+drop policy if exists "admins read installs" on public.attribution_installs;
+create policy "admins read installs" on public.attribution_installs for select using (public.is_admin());
+
+create table if not exists public.user_attribution (
+  user_id               uuid primary key references auth.users(id) on delete cascade,
+  first_touch_source    text not null default 'unknown' check (first_touch_source in ('meta', 'organic', 'direct', 'other', 'unknown')),
+  first_touch_medium    text,
+  first_touch_campaign  text,
+  first_touch_content   text,
+  first_touch_term      text,
+  first_touch_at        timestamptz,
+  first_install_id      uuid references public.attribution_installs(install_id) on delete set null,
+  last_touch_source     text check (last_touch_source in ('meta', 'organic', 'direct', 'other', 'unknown')),
+  last_touch_medium     text,
+  last_touch_campaign   text,
+  last_touch_content    text,
+  last_touch_term       text,
+  last_touch_at         timestamptz,
+  last_install_id       uuid references public.attribution_installs(install_id) on delete set null,
+  install_referrer      text,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+create index if not exists user_attribution_source_idx   on public.user_attribution (first_touch_source);
+create index if not exists user_attribution_campaign_idx on public.user_attribution (first_touch_campaign);
+alter table public.user_attribution enable row level security;
+drop policy if exists "admins read user attribution" on public.user_attribution;
+create policy "admins read user attribution" on public.user_attribution for select using (public.is_admin());
+-- No insert/update/delete policies: the app can never write its own attribution.
+
+create table if not exists public.analytics_events (
+  id          bigint generated always as identity primary key,
+  event       text not null check (event in ('app_open', 'install_attributed', 'signup', 'login', 'content_view',
+                                             'special_content_view', 'subscription_started', 'payment_success',
+                                             'subscription_expired')),
+  user_id     uuid references auth.users(id) on delete set null,
+  install_id  uuid,
+  source      text,
+  campaign    text,
+  content_id  uuid references public.titles(id) on delete set null,
+  plan_id     uuid references public.subscription_plans(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+create index if not exists analytics_events_event_idx on public.analytics_events (event, created_at);
+create index if not exists analytics_events_user_idx  on public.analytics_events (user_id, created_at);
+alter table public.analytics_events enable row level security;
+drop policy if exists "admins read events" on public.analytics_events;
+create policy "admins read events" on public.analytics_events for select using (public.is_admin());
+
+-- Purchase attribution snapshot (filled when a payment is approved; never changes the user's source).
+alter table public.payments add column if not exists attribution_source   text;
+alter table public.payments add column if not exists attribution_campaign text;
+alter table public.payments add column if not exists attribution_content  text;
+
+-- Content tags. STREAMS_SPECIAL = campaign content for Meta-acquired accounts.
+alter table public.titles add column if not exists tags text[] not null default '{}';
+alter table public.titles drop constraint if exists titles_tags_check;
+alter table public.titles add constraint titles_tags_check check (tags <@ array['STREAMS_SPECIAL', 'NEW']::text[]);
+create index if not exists titles_tags_idx on public.titles using gin (tags);
+
+-- ---------- who is Meta-acquired (server-side, authoritative) ----------
+create or replace function public.is_meta_user()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.user_attribution
+                  where user_id = auth.uid() and first_touch_source = 'meta')
+$$;
+
+-- STREAMS_SPECIAL titles are returned only to Meta-acquired accounts (and admins).
+-- Every other visibility rule (drafts, hidden premium) is unchanged.
+drop policy if exists "visible titles" on public.titles;
+create policy "visible titles" on public.titles for select using (
+  public.is_admin()
+  or (published
+      and (tier <> 'hidden_premium' or public.has_active_subscription())
+      and (not ('STREAMS_SPECIAL' = any (tags)) or public.is_meta_user()))
+);
+
+-- Same rule for the video files themselves (premium/free rules unchanged).
+create or replace function public.can_stream(object_name text)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare t public.titles;
+begin
+  if public.is_admin() then return true; end if;
+  if auth.uid() is null then return false; end if;
+
+  select * into t from public.titles
+   where published and (trailer_path = object_name or video_path = object_name)
+   limit 1;
+  if not found then
+    select tt.* into t from public.episodes e join public.titles tt on tt.id = e.title_id
+     where tt.published and e.video_path = object_name limit 1;
+    if not found then return false; end if;
+  end if;
+
+  if 'STREAMS_SPECIAL' = any (t.tags) and not public.is_meta_user() then return false; end if;
+  if t.tier = 'hidden_premium' then return public.has_active_subscription(); end if;
+  if t.trailer_path = object_name then return true; end if;
+  if t.tier = 'free' then return true; end if;
+  return public.has_active_subscription() or t.trailer_path is null;
+end $$;
+
+-- ---------- 1) app reports its install (signed in or not) ---------------
+create or replace function public.record_install(
+  p_install_id uuid, p_status text, p_referrer text, p_click_ts bigint, p_install_ts bigint)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  p   jsonb;
+  ins public.attribution_installs;
+  st  text := lower(coalesce(p_status, ''));
+  ref text := nullif(left(trim(coalesce(p_referrer, '')), 1000), '');
+begin
+  if p_install_id is null then raise exception 'Missing install id'; end if;
+  if st not in ('ok', 'not_supported', 'unavailable', 'error') then raise exception 'Bad referrer status'; end if;
+  if st <> 'ok' then ref := null; end if;
+  p := public.parse_install_referrer(ref);
+
+  insert into public.attribution_installs as a
+    (install_id, referrer_status, install_referrer, source, utm_source, medium, campaign, content, term,
+     referrer_click_at, install_begin_at)
+  values
+    (p_install_id, st, ref, p ->> 'source', p ->> 'utm_source', p ->> 'medium', p ->> 'campaign',
+     p ->> 'content', p ->> 'term',
+     case when p_click_ts   > 0 and p_click_ts   < 4102444800 then to_timestamp(p_click_ts)   end,
+     case when p_install_ts > 0 and p_install_ts < 4102444800 then to_timestamp(p_install_ts) end)
+  on conflict (install_id) do update
+     -- First successful read wins; only a missing/failed read may be filled in later.
+     set referrer_status = excluded.referrer_status, install_referrer = excluded.install_referrer,
+         source = excluded.source, utm_source = excluded.utm_source, medium = excluded.medium,
+         campaign = excluded.campaign, content = excluded.content, term = excluded.term,
+         referrer_click_at = excluded.referrer_click_at, install_begin_at = excluded.install_begin_at,
+         updated_at = now()
+   where a.referrer_status <> 'ok' and excluded.referrer_status = 'ok'
+  returning * into ins;
+
+  if ins.install_id is null then select * into ins from public.attribution_installs where install_id = p_install_id; end if;
+  return json_build_object('source', ins.source, 'status', ins.referrer_status);
+end $$;
+
+-- ---------- 2) signed-in account claims the install ---------------------
+--   First touch is set once and never overwritten. An install only becomes an
+--   account's first touch if that account was created on/after the install and no
+--   other account has already claimed it — so a different person signing in on the
+--   same phone later is not counted as Meta-acquired.
+create or replace function public.attribute_user(p_install_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  uid      uuid := auth.uid();
+  ins      public.attribution_installs;
+  ua       public.user_attribution;
+  acct_at  timestamptz;
+  eligible boolean := false;
+  touch_at timestamptz;
+begin
+  if uid is null then raise exception 'Please sign in first'; end if;
+  select * into ins from public.attribution_installs where install_id = p_install_id for update;
+  if not found then return json_build_object('pending', true); end if;
+
+  select created_at into acct_at from auth.users where id = uid;
+  touch_at := coalesce(ins.referrer_click_at, ins.install_begin_at, ins.created_at);
+  eligible := ins.referrer_status = 'ok'
+          and (ins.first_user_id is null or ins.first_user_id = uid)
+          and acct_at >= coalesce(ins.install_begin_at, ins.created_at) - interval '1 day';
+
+  if eligible and ins.first_user_id is null then
+    update public.attribution_installs set first_user_id = uid, updated_at = now() where install_id = ins.install_id;
+  end if;
+
+  select * into ua from public.user_attribution where user_id = uid for update;
+  if not found then
+    insert into public.user_attribution (
+      user_id, first_touch_source, first_touch_medium, first_touch_campaign, first_touch_content, first_touch_term,
+      first_touch_at, first_install_id,
+      last_touch_source, last_touch_medium, last_touch_campaign, last_touch_content, last_touch_term,
+      last_touch_at, last_install_id, install_referrer)
+    values (
+      uid,
+      case when eligible then ins.source else 'unknown' end,
+      case when eligible then ins.medium end,
+      case when eligible then ins.campaign end,
+      case when eligible then ins.content end,
+      case when eligible then ins.term end,
+      case when eligible then touch_at else acct_at end,
+      case when eligible then ins.install_id end,
+      ins.source, ins.medium, ins.campaign, ins.content, ins.term, touch_at, ins.install_id, ins.install_referrer)
+    returning * into ua;
+    if eligible then
+      insert into public.analytics_events (event, user_id, install_id, source, campaign)
+      values ('install_attributed', uid, ins.install_id, ins.source, ins.campaign);
+    end if;
+  else
+    -- Never overwrite a known first touch; only fill one that was never set.
+    if ua.first_install_id is null and ua.first_touch_source = 'unknown' and eligible then
+      update public.user_attribution
+         set first_touch_source = ins.source, first_touch_medium = ins.medium, first_touch_campaign = ins.campaign,
+             first_touch_content = ins.content, first_touch_term = ins.term, first_touch_at = touch_at,
+             first_install_id = ins.install_id, updated_at = now()
+       where user_id = uid;
+      insert into public.analytics_events (event, user_id, install_id, source, campaign)
+      values ('install_attributed', uid, ins.install_id, ins.source, ins.campaign);
+    end if;
+    -- Last touch follows the most recent install this account was used on (no-op if unchanged).
+    if ua.last_install_id is distinct from ins.install_id and ins.referrer_status = 'ok' then
+      update public.user_attribution
+         set last_touch_source = ins.source, last_touch_medium = ins.medium, last_touch_campaign = ins.campaign,
+             last_touch_content = ins.content, last_touch_term = ins.term, last_touch_at = touch_at,
+             last_install_id = ins.install_id, install_referrer = ins.install_referrer, updated_at = now()
+       where user_id = uid;
+    end if;
+    select * into ua from public.user_attribution where user_id = uid;
+  end if;
+
+  return json_build_object('source', ua.first_touch_source, 'special', ua.first_touch_source = 'meta');
+end $$;
+
+-- ---------- 3) app events (no personal data; source added server-side) --
+create or replace function public.log_event(p_event text, p_install_id uuid, p_content_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  uid  uuid := auth.uid();
+  src  text;
+  camp text;
+  special boolean := false;
+begin
+  if p_event not in ('app_open', 'login', 'content_view') then raise exception 'Unsupported event'; end if;
+  if p_event = 'login' and uid is null then return; end if;
+  if uid is null and p_install_id is null then return; end if;
+  -- Cheap de-duplication of repeated taps / double opens.
+  if exists (select 1 from public.analytics_events
+              where event in (p_event, case when p_event = 'content_view' then 'special_content_view' end)
+                and created_at > now() - interval '30 seconds'
+                and (user_id = uid or (uid is null and install_id = p_install_id))
+                and content_id is not distinct from p_content_id) then
+    return;
+  end if;
+
+  if uid is not null then
+    select first_touch_source, first_touch_campaign into src, camp from public.user_attribution where user_id = uid;
+  end if;
+  if src is null and p_install_id is not null then
+    select source, campaign into src, camp from public.attribution_installs where install_id = p_install_id;
+  end if;
+  if p_content_id is not null then
+    select 'STREAMS_SPECIAL' = any (tags) into special from public.titles where id = p_content_id;
+    if not found then return; end if;
+  end if;
+
+  insert into public.analytics_events (event, user_id, install_id, source, campaign, content_id)
+  values (case when p_event = 'content_view' and coalesce(special, false) then 'special_content_view' else p_event end,
+          uid, p_install_id, coalesce(src, 'unknown'), camp, p_content_id);
+end $$;
+
+-- ---------- 4) server-side events --------------------------------------
+-- signup: every new account.
+create or replace function public.on_auth_user_created()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.analytics_events (event, user_id, source) values ('signup', new.id, 'unknown');
+  return new;
+exception when others then
+  return new;   -- analytics must never block a sign-up
+end $$;
+drop trigger if exists streams_on_auth_user_created on auth.users;
+create trigger streams_on_auth_user_created after insert on auth.users
+  for each row execute function public.on_auth_user_created();
+
+-- Purchase attribution: when a payment becomes approved (manual approval, UPI app
+-- success or bank-credit match — all verified server-side), snapshot the buyer's
+-- first-touch source onto the payment and log payment_success / subscription_started.
+create or replace function public.payments_attribution()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare ua public.user_attribution; had_active boolean;
+begin
+  if new.status = 'approved' and old.status is distinct from 'approved' then
+    select * into ua from public.user_attribution where user_id = new.user_id;
+    new.attribution_source   := coalesce(ua.first_touch_source, 'unknown');
+    new.attribution_campaign := ua.first_touch_campaign;
+    new.attribution_content  := ua.first_touch_content;
+
+    select exists (select 1 from public.subscriptions
+                    where user_id = new.user_id and status = 'active' and expires_at > now()) into had_active;
+    insert into public.analytics_events (event, user_id, source, campaign, plan_id)
+    values ('payment_success', new.user_id, new.attribution_source, new.attribution_campaign, new.plan_id);
+    if not had_active then
+      insert into public.analytics_events (event, user_id, source, campaign, plan_id)
+      values ('subscription_started', new.user_id, new.attribution_source, new.attribution_campaign, new.plan_id);
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists payments_attribution on public.payments;
+create trigger payments_attribution before update on public.payments
+  for each row execute function public.payments_attribution();
+
+-- subscription_expired: logged by the expiry sweep.
+create or replace function public.expire_subscriptions()
+returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  with expired as (
+    update public.subscriptions set status = 'expired', updated_at = now()
+     where status = 'active' and expires_at <= now()
+    returning user_id, plan_id
+  )
+  insert into public.analytics_events (event, user_id, source, campaign, plan_id)
+  select 'subscription_expired', e.user_id, coalesce(ua.first_touch_source, 'unknown'), ua.first_touch_campaign, e.plan_id
+    from expired e left join public.user_attribution ua on ua.user_id = e.user_id;
+  get diagnostics n = row_count;
+  delete from public.payments where status = 'initiated' and created_at < now() - interval '1 day';
+  return n;
+end $$;
+
+-- ---------- 5) admin reporting -----------------------------------------
+-- Source buckets and campaign rows for a date range + optional filters.
+--   installs       devices that reported an install (Play Install Referrer)
+--   registrations  accounts created in the range, by first-touch source
+--   purchasers     distinct buyers with a verified (approved) payment in the range
+--   revenue        sum of verified payments in the range (revoked/failed excluded)
+create or replace function public.admin_attribution_report(
+  p_from timestamptz, p_to timestamptz, p_source text, p_campaign text, p_plan uuid)
+returns json language plpgsql stable security definer set search_path = public as $$
+declare
+  f timestamptz := coalesce(p_from, '-infinity');
+  t timestamptz := coalesce(p_to, 'infinity');
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  return (
+    with
+    inst as (
+      select source, campaign, count(*) n from public.attribution_installs
+       where created_at >= f and created_at < t
+         and (p_source is null or source = p_source)
+         and (p_campaign is null or campaign = p_campaign)
+       group by 1, 2),
+    regs as (
+      select coalesce(ua.first_touch_source, 'unknown') source, ua.first_touch_campaign campaign, count(*) n
+        from auth.users u left join public.user_attribution ua on ua.user_id = u.id
+       where u.created_at >= f and u.created_at < t
+         and (p_source is null or coalesce(ua.first_touch_source, 'unknown') = p_source)
+         and (p_campaign is null or ua.first_touch_campaign = p_campaign)
+       group by 1, 2),
+    pays as (
+      select coalesce(p.attribution_source, ua.first_touch_source, 'unknown') source,
+             case when p.attribution_source is not null then p.attribution_campaign else ua.first_touch_campaign end campaign,
+             count(distinct p.user_id) buyers, count(*) purchases, coalesce(sum(p.amount), 0) revenue
+        from public.payments p left join public.user_attribution ua on ua.user_id = p.user_id
+       where p.status = 'approved' and coalesce(p.reviewed_at, p.created_at) >= f and coalesce(p.reviewed_at, p.created_at) < t
+         and (p_plan is null or p.plan_id = p_plan)
+         and (p_source is null or coalesce(p.attribution_source, ua.first_touch_source, 'unknown') = p_source)
+         and (p_campaign is null or coalesce(p.attribution_campaign, ua.first_touch_campaign) = p_campaign)
+       group by 1, 2),
+    keys as (select source, campaign from inst union select source, campaign from regs union select source, campaign from pays),
+    all_rows as (
+      select k.source, k.campaign,
+             coalesce(i.n, 0) installs, coalesce(r.n, 0) registrations,
+             coalesce(p.buyers, 0) purchasers, coalesce(p.purchases, 0) purchases, coalesce(p.revenue, 0) revenue
+        from keys k
+        left join inst i on i.source = k.source and i.campaign is not distinct from k.campaign
+        left join regs r on r.source = k.source and r.campaign is not distinct from k.campaign
+        left join pays p on p.source = k.source and p.campaign is not distinct from k.campaign)
+    select json_build_object(
+      'by_source', coalesce((select json_agg(x order by x.revenue desc, x.registrations desc) from (
+          select source, sum(installs) installs, sum(registrations) registrations, sum(purchasers) purchasers,
+                 sum(purchases) purchases, sum(revenue) revenue
+            from all_rows group by source) x), '[]'),
+      'campaigns', coalesce((select json_agg(x order by x.revenue desc, x.registrations desc, x.installs desc) from (
+          select * from all_rows where campaign is not null) x), '[]'))
+  );
+end $$;
+
+-- Users with their attribution, plan and revenue (filters: source, campaign, dates, purchase status, plan, text).
+create or replace function public.admin_attribution_users(
+  p_from timestamptz, p_to timestamptz, p_source text, p_campaign text,
+  p_purchased boolean, p_plan uuid, p_search text, p_limit int)
+returns json language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  return coalesce((select json_agg(x order by x.registered_at desc) from (
+    select u.id user_id, u.email, u.created_at registered_at,
+           coalesce(ua.first_touch_source, 'unknown') source, ua.first_touch_campaign campaign,
+           ua.first_touch_content content, ua.first_touch_at, ua.last_touch_source, ua.last_touch_at,
+           s.status sub_status, s.expires_at, sp.name plan_name,
+           coalesce(pay.revenue, 0) revenue, coalesce(pay.purchases, 0) purchases
+      from auth.users u
+      left join public.user_attribution ua on ua.user_id = u.id
+      left join public.subscriptions s on s.user_id = u.id
+      left join public.subscription_plans sp on sp.id = s.plan_id
+      left join lateral (
+        select sum(amount) revenue, count(*) purchases from public.payments p
+         where p.user_id = u.id and p.status = 'approved' and (p_plan is null or p.plan_id = p_plan)) pay on true
+     where u.created_at >= coalesce(p_from, '-infinity') and u.created_at < coalesce(p_to, 'infinity')
+       and (p_source is null or coalesce(ua.first_touch_source, 'unknown') = p_source)
+       and (p_campaign is null or ua.first_touch_campaign = p_campaign)
+       and (p_purchased is null or (coalesce(pay.purchases, 0) > 0) = p_purchased)
+       and (p_search is null or u.email ilike '%' || p_search || '%')
+     order by u.created_at desc
+     limit least(greatest(coalesce(p_limit, 100), 1), 500)) x), '[]');
+end $$;
+
+-- One user's full picture for the admin user-detail view.
+create or replace function public.admin_user_detail(p_user_id uuid)
+returns json language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Not allowed'; end if;
+  return (
+    select json_build_object(
+      'user_id', u.id, 'email', u.email, 'registered_at', u.created_at,
+      'attribution', (select row_to_json(ua) from public.user_attribution ua where ua.user_id = u.id),
+      'subscription', (select json_build_object('status', s.status, 'expires_at', s.expires_at, 'plan', sp.name)
+                         from public.subscriptions s left join public.subscription_plans sp on sp.id = s.plan_id
+                        where s.user_id = u.id),
+      'payments', coalesce((select json_agg(json_build_object(
+                     'id', p.id, 'plan', p.plan_name, 'amount', p.amount, 'status', p.status, 'method', p.method,
+                     'utr', coalesce(p.txn_id, p.reference), 'created_at', p.created_at, 'reviewed_at', p.reviewed_at,
+                     'attribution_source', p.attribution_source, 'attribution_campaign', p.attribution_campaign)
+                     order by p.created_at desc)
+                   from public.payments p where p.user_id = u.id and p.status <> 'initiated'), '[]'),
+      'revenue', (select coalesce(sum(amount), 0) from public.payments where user_id = u.id and status = 'approved'))
+    from auth.users u where u.id = p_user_id);
+end $$;
+
+-- ---------- grants -----------------------------------------------------
+revoke execute on function public.record_install(uuid, text, text, bigint, bigint) from public;
+grant  execute on function public.record_install(uuid, text, text, bigint, bigint) to anon, authenticated;
+revoke execute on function public.log_event(text, uuid, uuid) from public;
+grant  execute on function public.log_event(text, uuid, uuid) to anon, authenticated;
+revoke execute on function public.attribute_user(uuid) from public, anon;
+grant  execute on function public.attribute_user(uuid) to authenticated;
+revoke execute on function public.admin_attribution_report(timestamptz, timestamptz, text, text, uuid) from public, anon;
+grant  execute on function public.admin_attribution_report(timestamptz, timestamptz, text, text, uuid) to authenticated;
+revoke execute on function public.admin_attribution_users(timestamptz, timestamptz, text, text, boolean, uuid, text, int) from public, anon;
+grant  execute on function public.admin_attribution_users(timestamptz, timestamptz, text, text, boolean, uuid, text, int) to authenticated;
+revoke execute on function public.admin_user_detail(uuid) from public, anon;
+grant  execute on function public.admin_user_detail(uuid) to authenticated;
+revoke execute on function public.on_auth_user_created() from public, anon, authenticated;
+revoke execute on function public.payments_attribution() from public, anon, authenticated;
+revoke execute on function public.expire_subscriptions() from public, anon, authenticated;
+
+-- Pure helpers: pin search_path; is_meta_user is only meaningful when signed in.
+alter function public.url_decode(text) set search_path = public;
+alter function public.clean_utm(text) set search_path = public;
+alter function public.parse_install_referrer(text) set search_path = public;
+alter function public.parse_upi_response(text) set search_path = public;
+alter function public.plan_interval(public.subscription_plans) set search_path = public;
+revoke execute on function public.is_meta_user() from anon;

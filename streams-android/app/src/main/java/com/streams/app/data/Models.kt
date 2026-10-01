@@ -46,8 +46,16 @@ data class Title(
     val featured: Boolean = false,
     @SerialName("view_count") val viewCount: Long = 0,
     @SerialName("preview_count") val previewCount: Long = 0,
+    /** Content tags, e.g. STREAMS_SPECIAL (Meta-campaign content, filtered by the server). */
+    val tags: List<String> = emptyList(),
 ) {
     val isSeries get() = kind == "series"
+    val isStreamsSpecial get() = Tags.STREAMS_SPECIAL in tags
+}
+
+object Tags {
+    const val STREAMS_SPECIAL = "STREAMS_SPECIAL"
+    const val NEW = "NEW"
 }
 
 @Serializable
@@ -159,4 +167,92 @@ data class AdminStats(
     @SerialName("paying_subscribers") val payingSubscribers: Long = 0,
     @SerialName("expired_subscribers") val expiredSubscribers: Long = 0,
     @SerialName("pending_payments") val pendingPayments: Long = 0,
+)
+
+// ---------------------------------------------------------------- acquisition attribution
+
+@Serializable
+data class AttributeResult(
+    val source: String? = null,
+    val special: Boolean = false,
+    val pending: Boolean = false,
+)
+
+/** One row of the admin attribution report (a source, or a source + campaign). */
+@Serializable
+data class AttributionRow(
+    val source: String,
+    val campaign: String? = null,
+    val installs: Long = 0,
+    val registrations: Long = 0,
+    val purchasers: Long = 0,
+    val purchases: Long = 0,
+    val revenue: Double = 0.0,
+)
+
+@Serializable
+data class AttributionReport(
+    @SerialName("by_source") val bySource: List<AttributionRow> = emptyList(),
+    val campaigns: List<AttributionRow> = emptyList(),
+)
+
+@Serializable
+data class AttributedUser(
+    @SerialName("user_id") val userId: String,
+    val email: String? = null,
+    @SerialName("registered_at") val registeredAt: String,
+    val source: String = "unknown",
+    val campaign: String? = null,
+    val content: String? = null,
+    @SerialName("first_touch_at") val firstTouchAt: String? = null,
+    @SerialName("last_touch_source") val lastTouchSource: String? = null,
+    @SerialName("last_touch_at") val lastTouchAt: String? = null,
+    @SerialName("sub_status") val subStatus: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    @SerialName("plan_name") val planName: String? = null,
+    val revenue: Double = 0.0,
+    val purchases: Long = 0,
+)
+
+@Serializable
+data class UserAttributionInfo(
+    @SerialName("first_touch_source") val firstTouchSource: String = "unknown",
+    @SerialName("first_touch_medium") val firstTouchMedium: String? = null,
+    @SerialName("first_touch_campaign") val firstTouchCampaign: String? = null,
+    @SerialName("first_touch_content") val firstTouchContent: String? = null,
+    @SerialName("first_touch_at") val firstTouchAt: String? = null,
+    @SerialName("last_touch_source") val lastTouchSource: String? = null,
+    @SerialName("last_touch_campaign") val lastTouchCampaign: String? = null,
+    @SerialName("last_touch_at") val lastTouchAt: String? = null,
+)
+
+@Serializable
+data class UserSubscriptionInfo(
+    val status: String? = null,
+    @SerialName("expires_at") val expiresAt: String? = null,
+    val plan: String? = null,
+)
+
+@Serializable
+data class UserPaymentInfo(
+    val id: String,
+    val plan: String? = null,
+    val amount: Double? = null,
+    val status: String,
+    val method: String? = null,
+    val utr: String? = null,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("attribution_source") val attributionSource: String? = null,
+    @SerialName("attribution_campaign") val attributionCampaign: String? = null,
+)
+
+@Serializable
+data class UserDetail(
+    @SerialName("user_id") val userId: String,
+    val email: String? = null,
+    @SerialName("registered_at") val registeredAt: String,
+    val attribution: UserAttributionInfo? = null,
+    val subscription: UserSubscriptionInfo? = null,
+    val payments: List<UserPaymentInfo> = emptyList(),
+    val revenue: Double = 0.0,
 )

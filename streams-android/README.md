@@ -140,3 +140,20 @@ Note: Google Play's payment policy requires Play Billing for digital content bou
 ## Credits
 
 The app uses the **Poppins** font (© Indian Type Foundry, SIL Open Font License 1.1), bundled in `app/src/main/res/font/`.
+
+## Meta Ads attribution & STREAMS_SPECIAL content
+
+**How it works**
+1. Your Meta ad links to the app's **Google Play** page with a `referrer` parameter (build it in web admin → *Attribution → Meta campaign link builder*), e.g.
+   `https://play.google.com/store/apps/details?id=com.streams.app&referrer=utm_source%3Dmeta%26utm_medium%3Dpaid_social%26utm_campaign%3Dstreams_special%26utm_content%3Dad_01`
+   Meta *app-install* ads add their own referrer (`utm_source=apps.facebook.com…`) automatically — those are recognised as Meta too.
+2. On first launch the app reads the **Google Play Install Referrer** (official `com.android.installreferrer` library) and sends it with a random per-install id to `record_install`. The **server** parses it into source / medium / campaign / content / term.
+3. When someone signs in, `attribute_user` links that install to the account. **First touch is set once and never overwritten**; it's only given to an account created on/after that install and only to the first account that claims it.
+4. Titles tagged **STREAMS_SPECIAL** (admin → content editor → Tags) are returned by the database **only** to accounts whose first-touch source is Meta (RLS on `titles` + `can_stream`). Everyone else gets the normal catalogue. Payments, plans and premium rules are identical for everyone.
+5. When a payment is verified (approved by admin, UPI app SUCCESS, or bank-credit match) the buyer's first-touch source/campaign is copied onto the payment (`payments.attribution_*`).
+6. Admin → **Attribution** (app and web): installs, registrations, purchasers and revenue by source and by campaign, conversion rates, filters (dates, source, campaign, plan, purchase status), and a per-user detail view.
+
+**Important limits**
+- The Install Referrer exists **only for installs from Google Play**. APKs shared over WhatsApp/links always show as *Unknown*.
+- Meta app-install ads encrypt campaign details inside `utm_content`; without decrypting them (needs your Meta *install referrer decryption key*) those users show as *Meta* with no campaign name. Use tracked Play Store links (above) for named campaigns.
+- The referrer is read on the user's phone. A modified app could send a fake one, which would at most unlock STREAMS_SPECIAL discovery for that one account — never premium access or payments, which stay fully server-verified.

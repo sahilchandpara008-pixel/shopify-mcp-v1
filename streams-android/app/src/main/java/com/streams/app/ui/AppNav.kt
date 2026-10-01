@@ -41,6 +41,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.streams.app.AppState
+import com.streams.app.data.Attribution
 import com.streams.app.ui.admin.AdminLoginScreen
 import com.streams.app.ui.admin.AdminResetPasswordScreen
 import com.streams.app.ui.admin.AdminScreen
@@ -93,7 +94,12 @@ fun AppNav() {
 
     // Re-check subscription whenever the signed-in user changes.
     val userId = (session as? SessionStatus.Authenticated)?.session?.user?.id
-    LaunchedEffect(userId) { AppState.refreshAccess() }
+    LaunchedEffect(userId) {
+        AppState.refreshAccess()
+        // Link this install's ad attribution to the signed-in account (server decides; first touch
+        // is never overwritten). If that unlocks campaign content, reload the screens.
+        if (Attribution.onSessionChanged(userId)) AppState.accessVersion.value++
+    }
     // ...and every time the app comes back to the foreground (e.g. after paying, or once
     // an admin approved the payment), so Premium unlocks without restarting the app.
     LifecycleResumeEffect(userId) {

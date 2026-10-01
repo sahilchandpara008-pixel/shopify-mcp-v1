@@ -172,6 +172,43 @@ object Repo {
             put("p_payment_id", paymentId); put("p_response", response)
         }).decodeAs()
 
+    // ---------------------------------------------------------------- acquisition attribution
+    // The server parses the referrer and decides the source; the app only passes along what
+    // Google Play returned. Users can never write their attribution directly (RLS).
+
+    suspend fun recordInstall(installId: String, status: String, referrer: String?, clickTs: Long, installTs: Long) {
+        supabase.postgrest.rpc("record_install", buildJsonObject {
+            put("p_install_id", installId); put("p_status", status); put("p_referrer", referrer)
+            put("p_click_ts", clickTs); put("p_install_ts", installTs)
+        })
+    }
+
+    suspend fun attributeUser(installId: String): AttributeResult =
+        supabase.postgrest.rpc("attribute_user", buildJsonObject { put("p_install_id", installId) }).decodeAs()
+
+    suspend fun logEvent(event: String, installId: String, contentId: String?) {
+        supabase.postgrest.rpc("log_event", buildJsonObject {
+            put("p_event", event); put("p_install_id", installId); put("p_content_id", contentId)
+        })
+    }
+
+    suspend fun attributionReport(from: String?, source: String?, campaign: String?, planId: String?): AttributionReport =
+        supabase.postgrest.rpc("admin_attribution_report", buildJsonObject {
+            put("p_from", from); put("p_to", null as String?); put("p_source", source)
+            put("p_campaign", campaign); put("p_plan", planId)
+        }).decodeAs()
+
+    suspend fun attributionUsers(
+        from: String?, source: String?, campaign: String?, purchased: Boolean?, planId: String?, search: String?,
+    ): List<AttributedUser> =
+        supabase.postgrest.rpc("admin_attribution_users", buildJsonObject {
+            put("p_from", from); put("p_to", null as String?); put("p_source", source); put("p_campaign", campaign)
+            put("p_purchased", purchased); put("p_plan", planId); put("p_search", search?.ifBlank { null }); put("p_limit", 200)
+        }).decodeAs()
+
+    suspend fun userDetail(userId: String): UserDetail =
+        supabase.postgrest.rpc("admin_user_detail", buildJsonObject { put("p_user_id", userId) }).decodeAs()
+
     // ---------------------------------------------------------------- admin
     suspend fun adminStats(): AdminStats = supabase.postgrest.rpc("admin_stats").decodeAs()
 

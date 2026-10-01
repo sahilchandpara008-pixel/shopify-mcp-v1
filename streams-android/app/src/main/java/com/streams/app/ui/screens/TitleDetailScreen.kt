@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import coil3.compose.AsyncImage
 import com.streams.app.AppState
+import com.streams.app.data.Attribution
 import com.streams.app.Load
 import com.streams.app.data.Channel
 import com.streams.app.data.Episode
@@ -91,7 +92,10 @@ fun TitleDetailScreen(nav: NavController, titleId: String) {
     val access by AppState.accessVersion.collectAsStateWithLifecycle()
     val hasSub by AppState.hasSubscription.collectAsStateWithLifecycle()
     // Make sure the Subscribe / Play buttons reflect the latest plan status.
-    LaunchedEffect(titleId) { AppState.refreshAccess(onlyIfChanged = true) }
+    LaunchedEffect(titleId) {
+        Attribution.logEvent("content_view", titleId)   // server logs special_content_view for STREAMS_SPECIAL titles
+        AppState.refreshAccess(onlyIfChanged = true)
+    }
     val load = rememberLoad(titleId, access) {
         coroutineScope {
             val t = Repo.title(titleId) ?: error("This title isn't available.")

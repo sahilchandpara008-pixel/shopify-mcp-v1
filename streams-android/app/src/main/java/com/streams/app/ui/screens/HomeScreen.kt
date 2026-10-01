@@ -149,6 +149,10 @@ fun HomeScreen(nav: NavController) {
                             )
                         }
                     }
+                    // Campaign content: the server only returns STREAMS_SPECIAL titles to accounts that
+                    // came from a Meta ad, so for everyone else this list is empty and the row is hidden.
+                    val special = all.filter { it.isStreamsSpecial }
+                    if (special.isNotEmpty()) item(key = "special") { PosterRow("Streams Special", special, nav) }
                     val trending = all.sortedByDescending { it.viewCount }.take(10)
                     if (trending.size >= 3) item(key = "top10") { Top10Row(trending, nav) }
                     val newest = all.take(12)
