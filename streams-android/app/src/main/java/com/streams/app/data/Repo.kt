@@ -36,6 +36,32 @@ object Repo {
             createUser = true
         }
 
+    /** Customer e-mail + password sign-in. */
+    suspend fun passwordSignIn(email: String, password: String) =
+        supabase.auth.signInWith(Email) {
+            this.email = email.trim()
+            this.password = password
+        }
+
+    /**
+     * New account with e-mail + password. Returns true when the person is signed in straight away,
+     * false when Supabase first wants the address confirmed (a confirmation e-mail was sent).
+     */
+    suspend fun passwordSignUp(email: String, password: String): Boolean {
+        supabase.auth.signUpWith(Email, redirectUrl = Links.LOGIN) {
+            this.email = email.trim()
+            this.password = password
+        }
+        return supabase.auth.currentSessionOrNull() != null
+    }
+
+    /** "Forgot password?" — e-mails a one-time link that opens the set-password screen. */
+    suspend fun sendPasswordLink(email: String) =
+        supabase.auth.signInWith(OTP, redirectUrl = Links.SET_PASSWORD) {
+            this.email = email.trim()
+            createUser = false
+        }
+
     suspend fun adminPasswordSignIn(email: String, password: String) =
         supabase.auth.signInWith(Email) {
             this.email = email.trim()

@@ -15,6 +15,7 @@ object Links {
     const val HOST = "login-callback"
     const val LOGIN = "$SCHEME://$HOST"
     const val ADMIN_SET_PASSWORD = "$SCHEME://$HOST/admin-reset"
+    const val SET_PASSWORD = "$SCHEME://$HOST/set-password"
 }
 
 val supabase by lazy {
@@ -50,6 +51,9 @@ fun Throwable.friendly(): String {
         "Please type a short reason",
         "Please sign in first",
         "Invalid login credentials",
+        "Email not confirmed",
+        "User already registered",
+        "Password should be",
         "Not allowed",
         "This payment has expired",
         "The UPI app did not",

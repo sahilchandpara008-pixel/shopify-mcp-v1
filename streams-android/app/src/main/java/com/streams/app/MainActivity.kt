@@ -31,10 +31,11 @@ class MainActivity : ComponentActivity() {
         handleAuthLink(intent)
     }
 
-    /** streams://login-callback[/admin-reset]?code=... — finishes Google / e-mail sign-in. */
+    /** streams://login-callback[/admin-reset|/set-password]?code=... — finishes Google / e-mail sign-in. */
     private fun handleAuthLink(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.path?.startsWith("/admin-reset") == true) AppState.pendingRoute.value = "admin-reset"
+        if (data.path?.startsWith("/set-password") == true) AppState.pendingRoute.value = "set-password"
         supabase.handleDeeplinks(intent)
     }
 }

@@ -48,6 +48,7 @@ import com.streams.app.ui.admin.AdminScreen
 import com.streams.app.ui.admin.ContentEditorScreen
 import com.streams.app.ui.components.Loading
 import com.streams.app.ui.screens.AuthScreen
+import com.streams.app.ui.screens.SetPasswordScreen
 import com.streams.app.ui.screens.ChannelDetailScreen
 import com.streams.app.ui.screens.ChannelsScreen
 import com.streams.app.ui.screens.CloudScreen
@@ -130,6 +131,7 @@ fun AppNav() {
             modifier = Modifier.padding(padding).consumeWindowInsets(padding),
         ) {
             composable("auth") { AuthScreen(onClose = { nav.popBackStack() }) }
+            composable("set-password") { SetPasswordScreen(onDone = { nav.popBackStack() }) }
             composable("home") { HomeScreen(nav) }
             composable("channels") { ChannelsScreen(nav) }
             composable("shows") { ShowsScreen(nav) }
