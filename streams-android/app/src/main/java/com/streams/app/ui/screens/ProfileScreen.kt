@@ -1,14 +1,11 @@
 package com.streams.app.ui.screens
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,6 +78,7 @@ import com.streams.app.data.PaymentSettings
 import com.streams.app.data.Plan
 import com.streams.app.data.Repo
 import com.streams.app.data.Subscription
+import com.streams.app.data.UpiPay
 import com.streams.app.data.currentEmail
 import com.streams.app.data.friendly
 import com.streams.app.rememberLoad
@@ -379,68 +377,31 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             checking = false
         }
     }
-    // The UPI app's answer until the server has accepted it (kept across screen rebuilds), so a
-    // failed send — expired sign-in, no internet — is retried instead of being lost.
-    var unsentResponse by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(order?.id) {
         val o = order ?: return@LaunchedEffect
         repeat(120) {
             delay(5000)
-            val p = unsentResponse
-                ?.let { resp -> runCatching { Repo.reportUpiResult(o.id, resp) }.getOrNull()?.also { unsentResponse = null } }
-                ?: runCatching { Repo.checkPaymentStatus(o.id) }.getOrNull()
-                ?: return@repeat
+            val p = runCatching { Repo.checkPaymentStatus(o.id) }.getOrNull() ?: return@repeat
             applyBackendStatus(p)
             if (p.status != "initiated") return@LaunchedEffect
         }
     }
 
-    // Back from GPay / PhonePe / Paytm / BharatPe: the UPI app returns
-    // "txnId=..&responseCode=..&Status=SUCCESS|FAILURE|SUBMITTED&txnRef=..&ApprovalRefNo=..".
-    // It is sent to the backend as-is, which saves it and decides.
-    // Survives Android closing Streams while the UPI app is open (common on low-memory phones):
-    // without it the UPI app's answer arrived but we no longer knew which order it was for.
-    var savedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
-    val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    // Back from GPay / PhonePe / Paytm / BharatPe: UpiPay (registered in MainActivity, so it
+    // survives Android closing Streams meanwhile) sends the UPI app's answer to the backend,
+    // which decides; its verdict arrives here.
+    val upiResult by UpiPay.result.collectAsStateWithLifecycle()
+    LaunchedEffect(upiResult) {
+        val p = upiResult ?: return@LaunchedEffect
+        UpiPay.result.value = null
         busy = false
-        val known = order
-        val fromApp = upiResponse(result.data)
-        // No answer from the UPI app: still record it on the order (admins see it), keep checking
-        // for a few minutes in case the payment did go through, and let the customer cancel.
-        val response = fromApp ?: buildString {
-            append("Status=NO_RESPONSE&resultCode=").append(result.resultCode)
-            result.data?.extras?.keySet()?.takeIf { it.isNotEmpty() }?.let { append("&extras=").append(it.joinToString(",")) }
-        }
-        noAnswer = fromApp == null
-        unsentResponse = response
-        scope.launch {
-            // Find the order this answer belongs to, even if the screen was rebuilt meanwhile.
-            val target = known
-                ?: savedOrderId?.let { id -> runCatching { Repo.payment(id) }.getOrNull() }
-                ?: runCatching { Repo.myOpenOrder() }.getOrNull()
-                ?: return@launch
-            if (order == null && target.status == "initiated") order = target
-            var lastError: Throwable? = null
-            repeat(3) { attempt ->   // send it reliably: retry briefly on a bad connection
-                // The UPI app's answer is only recorded; the backend's verified status decides.
-                val sent = runCatching { Repo.reportUpiResult(target.id, response) }
-                sent.onSuccess { p ->
-                    unsentResponse = null
-                    if (p.status != "initiated") savedOrderId = null
-                    applyBackendStatus(p)
-                    return@launch
-                }
-                lastError = sent.exceptionOrNull()
-                delay(1500L * (attempt + 1))
-            }
-            error = lastError?.friendly()
-        }
+        noAnswer = p.status == "initiated" && p.upiResponse?.startsWith("Status=NO_RESPONSE") == true
+        if (p.status == "initiated" && order == null) order = p
+        applyBackendStatus(p)
     }
     fun openUpiApp(settings: PaymentSettings, o: Payment) {
-        savedOrderId = o.id
-        try {
-            upiLauncher.launch(Intent.createChooser(upiIntent(settings, o), "Pay with"))
-        } catch (_: ActivityNotFoundException) {
+        noAnswer = false
+        if (!UpiPay.pay(Intent.createChooser(upiIntent(settings, o), "Pay with"), o.id)) {
             busy = false
             error = "No UPI app found on this phone."
         }
@@ -747,15 +708,6 @@ private fun upiIntent(s: PaymentSettings, order: Payment): Intent {
         .appendQueryParameter("tn", "Streams ${order.reference}")
         .build()
     return Intent(Intent.ACTION_VIEW, uri)
-}
-
-/** UPI apps return "txnId=..&Status=..", usually in the "response" extra; a few send separate extras. */
-private fun upiResponse(data: Intent?): String? {
-    data ?: return null
-    data.getStringExtra("response")?.takeIf { it.isNotBlank() }?.let { return it }
-    val extras = data.extras ?: return null
-    val pairs = extras.keySet().mapNotNull { k -> extras.getString(k)?.let { "$k=$it" } }
-    return pairs.takeIf { list -> list.any { it.startsWith("Status=", ignoreCase = true) } }?.joinToString("&")
 }
 
 private fun copy(context: Context, text: String) {
