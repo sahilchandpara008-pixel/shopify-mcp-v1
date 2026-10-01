@@ -379,11 +379,17 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             checking = false
         }
     }
+    // The UPI app's answer until the server has accepted it (kept across screen rebuilds), so a
+    // failed send — expired sign-in, no internet — is retried instead of being lost.
+    var unsentResponse by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(order?.id) {
         val o = order ?: return@LaunchedEffect
         repeat(120) {
             delay(5000)
-            val p = runCatching { Repo.checkPaymentStatus(o.id) }.getOrNull() ?: return@repeat
+            val p = unsentResponse
+                ?.let { resp -> runCatching { Repo.reportUpiResult(o.id, resp) }.getOrNull()?.also { unsentResponse = null } }
+                ?: runCatching { Repo.checkPaymentStatus(o.id) }.getOrNull()
+                ?: return@repeat
             applyBackendStatus(p)
             if (p.status != "initiated") return@LaunchedEffect
         }
@@ -406,6 +412,7 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
             result.data?.extras?.keySet()?.takeIf { it.isNotEmpty() }?.let { append("&extras=").append(it.joinToString(",")) }
         }
         noAnswer = fromApp == null
+        unsentResponse = response
         scope.launch {
             // Find the order this answer belongs to, even if the screen was rebuilt meanwhile.
             val target = known
@@ -418,6 +425,7 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
                 // The UPI app's answer is only recorded; the backend's verified status decides.
                 val sent = runCatching { Repo.reportUpiResult(target.id, response) }
                 sent.onSuccess { p ->
+                    unsentResponse = null
                     if (p.status != "initiated") savedOrderId = null
                     applyBackendStatus(p)
                     return@launch

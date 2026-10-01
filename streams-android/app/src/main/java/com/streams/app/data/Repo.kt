@@ -181,10 +181,16 @@ object Repo {
      * Step 2: send whatever the UPI app returned to the backend. SUCCESS → plan applied now,
      * FAILURE → order marked failed, anything else → order stays open.
      */
-    suspend fun reportUpiResult(paymentId: String, response: String): Payment =
-        supabase.postgrest.rpc("report_upi_result", buildJsonObject {
+    /**
+     * The customer may spend minutes in the UPI app; the sign-in token can expire meanwhile and the
+     * server then answers 401. Refresh the session first so the UPI app's answer is never rejected.
+     */
+    suspend fun reportUpiResult(paymentId: String, response: String): Payment {
+        runCatching { supabase.auth.refreshCurrentSession() }
+        return supabase.postgrest.rpc("report_upi_result", buildJsonObject {
             put("p_payment_id", paymentId); put("p_response", response)
         }).decodeAs()
+    }
 
     /**
      * Ask the backend for the authoritative status of my order. The server tries trusted
