@@ -58,6 +58,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -382,32 +383,52 @@ private fun PlansSection(d: ProfileData, onSignIn: () -> Unit, onSubmitted: () -
     // Back from GPay / PhonePe / Paytm / BharatPe: the UPI app returns
     // "txnId=..&responseCode=..&Status=SUCCESS|FAILURE|SUBMITTED&txnRef=..&ApprovalRefNo=..".
     // It is sent to the backend as-is, which saves it and decides.
+    // Survives Android closing Streams while the UPI app is open (common on low-memory phones):
+    // without it the UPI app's answer arrived but we no longer knew which order it was for.
+    var savedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     val upiLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         busy = false
-        val o = order ?: return@rememberLauncherForActivityResult
+        val known = order
         val fromApp = upiResponse(result.data)
         // No answer from the UPI app: still record it on the order (admins see it), keep checking
         // for a few minutes in case the payment did go through, and let the customer cancel.
-        val response = fromApp ?: "Status=NO_RESPONSE&resultCode=${result.resultCode}"
+        val response = fromApp ?: buildString {
+            append("Status=NO_RESPONSE&resultCode=").append(result.resultCode)
+            result.data?.extras?.keySet()?.takeIf { it.isNotEmpty() }?.let { append("&extras=").append(it.joinToString(",")) }
+        }
         noAnswer = fromApp == null
         scope.launch {
-            runCatching { Repo.reportUpiResult(o.id, response) }
-                .onSuccess { p ->
+            // Find the order this answer belongs to, even if the screen was rebuilt meanwhile.
+            val target = known
+                ?: savedOrderId?.let { id -> runCatching { Repo.payment(id) }.getOrNull() }
+                ?: runCatching { Repo.myOpenOrder() }.getOrNull()
+                ?: return@launch
+            if (order == null && target.status == "initiated") order = target
+            var lastError: Throwable? = null
+            repeat(3) { attempt ->   // send it reliably: retry briefly on a bad connection
+                val sent = runCatching { Repo.reportUpiResult(target.id, response) }
+                sent.onSuccess { p ->
                     when (p.status) {
-                        "approved" -> { activated = p; order = null; noAnswer = false; onSubmitted() }
+                        "approved" -> { activated = p; order = null; savedOrderId = null; noAnswer = false; onSubmitted() }
                         "failed" -> {
                             order = null
+                            savedOrderId = null
                             noAnswer = false
                             error = "Payment failed in your UPI app (${p.upiStatusLabel ?: "failed"}). " +
                                 "No money was taken for a plan — please try again."
                         }
-                        else -> Unit // pending: keep waiting, we check every few seconds
+                        else -> Unit // pending / no answer: keep waiting, we check every few seconds
                     }
+                    return@launch
                 }
-                .onFailure { error = it.friendly() }
+                lastError = sent.exceptionOrNull()
+                delay(1500L * (attempt + 1))
+            }
+            error = lastError?.friendly()
         }
     }
     fun openUpiApp(settings: PaymentSettings, o: Payment) {
+        savedOrderId = o.id
         try {
             upiLauncher.launch(Intent.createChooser(upiIntent(settings, o), "Pay with"))
         } catch (_: ActivityNotFoundException) {
