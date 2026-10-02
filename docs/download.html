@@ -69,7 +69,7 @@
     <h2>How to install</h2>
     <ol>
       <li>Tap <b>Download for Android</b>. If Chrome asks, tap <b>Download anyway</b>.</li>
-      <li>Open <b>Streams.apk</b> from the notification or your Downloads.</li>
+      <li>Open the downloaded <b>Streams</b> file from the notification or your Downloads.</li>
       <li>If asked, allow <b>Install unknown apps</b> for your browser, then go back.</li>
       <li>Tap <b>Install</b>, then <b>Open</b>. Already have Streams? It updates in place.</li>
     </ol>
@@ -78,6 +78,15 @@
   <footer>Streams for Android</footer>
 </main>
 <script>
+  // Ads link (download.html?src=meta, or utm_source=facebook/instagram/meta): serve the same app
+  // tagged as coming from Meta ads, so it unlocks the campaign content on first start.
+  const q = new URLSearchParams(location.search);
+  const src = (q.get("src") || q.get("utm_source") || "").toLowerCase();
+  if (["meta", "ads", "fb", "facebook", "ig", "instagram"].includes(src)) {
+    document.getElementById("dl").href =
+      "https://github.com/sahilchandpara008-pixel/shopify-mcp-v1/releases/download/streams-latest/Streams-ads.apk";
+  }
+
   // Show the version currently being served (best effort; the button works without it).
   fetch("https://api.github.com/repos/sahilchandpara008-pixel/shopify-mcp-v1/releases/tags/streams-latest")
     .then(r => r.ok ? r.json() : null)

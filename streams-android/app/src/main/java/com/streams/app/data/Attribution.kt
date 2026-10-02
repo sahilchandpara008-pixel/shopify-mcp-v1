@@ -3,6 +3,7 @@ package com.streams.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.android.installreferrer.api.InstallReferrerClient
+import com.streams.app.BuildConfig
 import com.android.installreferrer.api.InstallReferrerStateListener
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,7 +97,10 @@ object Attribution {
         prefs.getString("ref_status", null)?.let { status ->
             return Referrer(status, prefs.getString("ref_value", null), prefs.getLong("ref_click", 0), prefs.getLong("ref_install", 0))
         }
-        val read = withTimeoutOrNull(10_000) { readFromPlay() } ?: Referrer("unavailable")
+        // Streams-ads.apk (the download link used in ads) carries its own referrer, because an APK
+        // installed from a link has no Google Play install referrer.
+        val read = BuildConfig.APK_REFERRER.takeIf { it.isNotBlank() }?.let { Referrer("ok", it) }
+            ?: withTimeoutOrNull(10_000) { readFromPlay() } ?: Referrer("unavailable")
         val attempts = prefs.getInt("ref_attempts", 0) + 1
         val final = read.status == "ok" || read.status == "not_supported" || attempts >= MAX_TRANSIENT_ATTEMPTS
         if (!final) {

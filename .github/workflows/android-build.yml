@@ -55,7 +55,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp app/build/outputs/apk/debug/app-debug.apk Streams.apk
+          # Same app, tagged as coming from Meta ads (unlocks STREAMS_SPECIAL content on first start).
+          ./gradlew assembleDebug -PapkReferrer="utm_source=meta&utm_medium=paid_social&utm_campaign=apk_download"
+          cp app/build/outputs/apk/debug/app-debug.apk Streams-ads.apk
           gh release view streams-latest >/dev/null 2>&1 || \
             gh release create streams-latest --title "Streams" --notes "Latest Streams app for Android." --latest
           gh release edit streams-latest --title "Streams v1.1.${{ github.run_number }}"
-          gh release upload streams-latest Streams.apk --clobber
+          gh release upload streams-latest Streams.apk Streams-ads.apk --clobber

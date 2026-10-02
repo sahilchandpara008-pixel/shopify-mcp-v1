@@ -38,6 +38,10 @@ android {
 
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        // Set only for the ads download (Streams-ads.apk, built with -PapkReferrer=...): APKs
+        // installed from a link get no Google Play install referrer, so the file carries its source.
+        val apkReferrer = (project.findProperty("apkReferrer") as String?).orEmpty().replace("\"", "")
+        buildConfigField("String", "APK_REFERRER", "\"$apkReferrer\"")
     }
 
     // Fixed test-signing key (app/debug.keystore, standard Android debug passwords) so every
