@@ -146,8 +146,10 @@ fun AppNav() {
                     navArgument("ep") { type = NavType.StringType; nullable = true },
                 ),
             ) {
-                // Watching anything needs an account. Once sign-in finishes, the video starts here.
-                if (!signedIn) {
+                // Watching needs an account. Once sign-in finishes, the video starts here.
+                // Exception: installs from Meta ads may watch trailers before signing in.
+                val mode = it.arguments?.getString("mode") ?: "full"
+                if (!signedIn && !(mode == "trailer" && Attribution.isMetaInstall)) {
                     AuthScreen(onClose = { nav.popBackStack() }, reason = "Sign in to start watching.")
                     return@composable
                 }

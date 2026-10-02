@@ -3,6 +3,7 @@ package com.streams.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import com.android.installreferrer.api.InstallReferrerClient
+import com.streams.app.AppState
 import com.streams.app.BuildConfig
 import com.android.installreferrer.api.InstallReferrerStateListener
 import kotlinx.coroutines.CoroutineScope
@@ -84,11 +85,19 @@ object Attribution {
         scope.launch { runCatching { Repo.logEvent(event, installId, contentId) } }
     }
 
+    /** This install came from Meta ads (as the server decided): may browse campaign content and trailers before sign-in. */
+    val isMetaInstall: Boolean
+        get() = prefs.getString("install_source", null) == "meta"
+
     private suspend fun ensureInstallRecorded(): Boolean = mutex.withLock {
-        if (prefs.getBoolean("install_reported", false)) return true
+        if (prefs.getBoolean("install_reported", false) && prefs.contains("install_source")) return true
         val ref = referrer() ?: return false   // temporary failure: try again next time
         return runCatching { Repo.recordInstall(installId, ref.status, ref.referrer, ref.clickTs, ref.installTs) }
-            .onSuccess { prefs.edit().putBoolean("install_reported", true).apply() }
+            .onSuccess { source ->
+                prefs.edit().putBoolean("install_reported", true).putString("install_source", source ?: "unknown").apply()
+                // Ads install: reload the screens so the campaign titles show up before sign-in.
+                if (source == "meta") AppState.accessVersion.value++
+            }
             .isSuccess
     }
 

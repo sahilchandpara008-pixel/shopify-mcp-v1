@@ -6,15 +6,20 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.auth.providers.builtin.OTP
+import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.storage.storage
 import io.github.jan.supabase.storage.upload
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
@@ -85,19 +90,48 @@ object Repo {
         supabase.postgrest.rpc("my_admin_role").data.trim().trim('"').takeIf { it.isNotBlank() && it != "null" }
 
     // ---------------------------------------------------------------- catalogue
+    /** Waits for the saved session to load at app start, so a signed-in member isn't mistaken for a guest. */
+    private suspend fun signedIn(): Boolean {
+        runCatching { supabase.auth.awaitInitialization() }
+        return supabase.auth.currentUserOrNull() != null
+    }
+
+    /**
+     * Before sign-in the catalog comes from catalog_for_install: the same titles everyone sees,
+     * plus the STREAMS_SPECIAL ones when this install came from Meta ads (decided by the server).
+     */
     suspend fun titles(): List<Title> =
-        supabase.from("titles").select {
-            order("created_at", Order.DESCENDING)
-        }.decodeList()
+        if (!signedIn()) {
+            supabase.postgrest.rpc("catalog_for_install", buildJsonObject { put("p_install_id", Attribution.installId) })
+                .decodeList()
+        } else {
+            supabase.from("titles").select {
+                order("created_at", Order.DESCENDING)
+            }.decodeList()
+        }
 
     suspend fun title(id: String): Title? =
-        supabase.from("titles").select { filter { eq("id", id) } }.decodeList<Title>().firstOrNull()
+        if (!signedIn()) titles().firstOrNull { it.id == id }
+        else supabase.from("titles").select { filter { eq("id", id) } }.decodeList<Title>().firstOrNull()
+
+    /** Trailer link for a Meta-ads install that hasn't signed in yet (Edge Function "trailer-url"). */
+    suspend fun adsTrailerUrl(titleId: String): String {
+        val res = supabase.functions.invoke("trailer-url", buildJsonObject {
+            put("title_id", titleId); put("install_id", Attribution.installId)
+        })
+        val body = Json.parseToJsonElement(res.bodyAsText()).jsonObject
+        return body["url"]?.jsonPrimitive?.content ?: error(body["error"]?.jsonPrimitive?.content ?: "Sign in to watch.")
+    }
 
     suspend fun channels(): List<Channel> =
         supabase.from("channels").select { order("sort_order", Order.ASCENDING) }.decodeList()
 
     suspend fun episodes(titleId: String): List<Episode> =
-        supabase.from("episodes").select {
+        if (!signedIn()) {
+            supabase.postgrest.rpc("episodes_for_install", buildJsonObject {
+                put("p_install_id", Attribution.installId); put("p_title_id", titleId)
+            }).decodeList()
+        } else supabase.from("episodes").select {
             filter { eq("title_id", titleId) }
             order("episode_number", Order.ASCENDING)
         }.decodeList()
@@ -215,11 +249,13 @@ object Repo {
     // The server parses the referrer and decides the source; the app only passes along what
     // Google Play returned. Users can never write their attribution directly (RLS).
 
-    suspend fun recordInstall(installId: String, status: String, referrer: String?, clickTs: Long, installTs: Long) {
-        supabase.postgrest.rpc("record_install", buildJsonObject {
+    /** Returns the source the server settled on for this install (meta / organic / direct / other / unknown). */
+    suspend fun recordInstall(installId: String, status: String, referrer: String?, clickTs: Long, installTs: Long): String? {
+        val res = supabase.postgrest.rpc("record_install", buildJsonObject {
             put("p_install_id", installId); put("p_status", status); put("p_referrer", referrer)
             put("p_click_ts", clickTs); put("p_install_ts", installTs)
         })
+        return runCatching { Json.parseToJsonElement(res.data).jsonObject["source"]?.jsonPrimitive?.content }.getOrNull()
     }
 
     suspend fun attributeUser(installId: String): AttributeResult =

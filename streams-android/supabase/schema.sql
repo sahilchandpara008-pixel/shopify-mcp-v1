@@ -2025,3 +2025,38 @@ begin
 end $$;
 revoke execute on function public.report_upi_result(uuid, text) from public, anon;
 grant execute on function public.report_upi_result(uuid, text) to authenticated;
+
+-- =====================================================================
+-- 24. Ads installs browse without signing in. An install whose referrer
+--     says Meta (attribution_installs.source = 'meta') sees the
+--     STREAMS_SPECIAL titles before login, and can watch trailers (the
+--     "trailer-url" Edge Function signs trailer links for it). Full videos
+--     still need sign-in + plan, exactly as before.
+-- =====================================================================
+create or replace function public.is_meta_install(p_install_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.attribution_installs
+                  where install_id = p_install_id and source = 'meta')
+$$;
+
+create or replace function public.catalog_for_install(p_install_id uuid)
+returns setof public.titles language sql stable security definer set search_path = public as $$
+  select t.* from public.titles t
+   where t.published and t.tier <> 'hidden_premium'
+     and (not ('STREAMS_SPECIAL' = any (t.tags)) or public.is_meta_install(p_install_id))
+   order by t.created_at desc
+$$;
+
+create or replace function public.episodes_for_install(p_install_id uuid, p_title_id uuid)
+returns setof public.episodes language sql stable security definer set search_path = public as $$
+  select e.* from public.episodes e
+   where e.title_id = p_title_id
+     and exists (select 1 from public.catalog_for_install(p_install_id) t where t.id = p_title_id)
+   order by e.episode_number
+$$;
+
+revoke execute on function public.is_meta_install(uuid) from public, anon, authenticated;
+revoke execute on function public.catalog_for_install(uuid) from public;
+revoke execute on function public.episodes_for_install(uuid, uuid) from public;
+grant execute on function public.catalog_for_install(uuid) to anon, authenticated;
+grant execute on function public.episodes_for_install(uuid, uuid) to anon, authenticated;

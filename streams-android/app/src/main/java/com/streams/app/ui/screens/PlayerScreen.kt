@@ -47,6 +47,8 @@ import androidx.navigation.NavController
 import com.streams.app.AppState
 import com.streams.app.Load
 import com.streams.app.data.Repo
+import com.streams.app.data.supabase
+import io.github.jan.supabase.auth.auth
 import com.streams.app.rememberLoad
 import com.streams.app.ui.components.ErrorState
 import com.streams.app.ui.components.Loading
@@ -75,8 +77,13 @@ fun PlayerScreen(nav: NavController, titleId: String, requestedMode: String, epi
             "trailer" -> t.trailerPath
             else -> ep?.videoPath ?: t.videoPath
         } ?: error("No video has been uploaded for this title yet.")
-        val url = runCatching { Repo.streamUrl(path) }
-            .getOrElse { error("Subscribe to watch this title.") }
+        val signedIn = supabase.auth.currentUserOrNull() != null
+        if (!signedIn && mode != "trailer") error("Sign in and choose a plan to watch the full title.")
+        val url = if (!signedIn) {
+            runCatching { Repo.adsTrailerUrl(t.id) }.getOrElse { error(it.message ?: "Sign in to watch.") }
+        } else {
+            runCatching { Repo.streamUrl(path) }.getOrElse { error("Subscribe to watch this title.") }
+        }
         Repo.recordView(t.id, preview = mode != "full")
         Playback(url, mode, ep?.let { "${t.name} · E${it.episodeNumber}" } ?: t.name)
     }
