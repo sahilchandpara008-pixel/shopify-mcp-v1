@@ -42,6 +42,7 @@ Use this list only to VERIFY the copy at the end. Do not build these yourself; t
    - Settings: contact support, policies, delete account (Edge Function delete-account).
    - Install attribution: organic vs ads (APK_REFERRER dart-define in the ads APK) and the install ↔ ad-click match.
    - Google Play build: free app; logged-in users get 15 GB free cloud (migration 20261009000017), Premium tab shows account status only, no plans or payment in the Play build.
+   - FREE MODE (migration 20261009000018, app_mode.free_mode = true): no plans or payments shown anywhere; ads users and owner-approved organic users get full access; organic users tap "Request full access" (admin Approvals); every logged-in user gets 15 GB cloud.
    - Two Android flavors: "direct" (shared APKs, UPI only, no Google code) and "play" (Google Play build: same app + Google Play alternative-billing info screen and report token, built with --dart-define=PLAY_STORE=true). If Google billing isn't available, the Play build shows "Payments are not available in this version" and never opens UPI.
 
 2. ADMIN PANEL + WEBSITE (Next.js, folder admin/, hosted on Vercel)
@@ -52,7 +53,7 @@ Use this list only to VERIFY the copy at the end. Do not build these yourself; t
    - Public website pages: "/" (shows /home to signed-out visitors, a Jollify-style landing page), /home, /d (ad download page with Meta Pixel), /api/click (stores the ad click), /privacy, /terms, /delete-account (whole account, or only some data), /report-content, plus a support form.
 
 3. SUPABASE BACKEND (folder supabase/)
-   - 17 migrations, 20261002000001 → 20261009000017. Tables: profiles, admins, installs, user_attribution, channels, channel_folders, channel_members, posts, post_items, admin_channel_access, plans, subscriptions, analytics_events, consents, reports, audit_logs, cloud_files, plan_requests, payment_settings, payment_orders, payment_events, meta_settings, meta_events, ad_clicks, play_settings, support_requests, plus storage buckets (including "downloads" for APKs) and Row Level Security on everything.
+   - 18 migrations, 20261002000001 → 20261009000018. Tables: profiles, admins, installs, user_attribution, channels, channel_folders, channel_members, posts, post_items, admin_channel_access, plans, subscriptions, analytics_events, consents, reports, audit_logs, cloud_files, plan_requests, payment_settings, payment_orders, payment_events, meta_settings, meta_events, ad_clicks, play_settings, support_requests, plus storage buckets (including "downloads" for APKs) and Row Level Security on everything.
    - Cron jobs: cancel-stale-payment-orders (*/30), meta-dispatch (every minute, Meta Conversions API), play-report (*/5).
    - Extensions: pg_cron, pg_net.
    - Edge Functions: delete-account, play-report (verify_jwt = false). upi-webhook exists in the code but is NOT deployed.
@@ -119,7 +120,7 @@ Then push to NEW_GITHUB_REPO on the main branch.
 STEP 4: NEW SUPABASE PROJECT (NEW_SUPABASE_REF, region Mumbai ap-south-1)
 ======================================================================
 Use the Supabase MCP tools or the Supabase CLI ("supabase link --project-ref NEW_SUPABASE_REF" then "supabase db push").
-1. Apply ALL 17 migrations in filename order, with only the STEP 2 edits. If one times out, split it into parts and run each part with "set lock_timeout = '10s';". Never skip one, never reorder.
+1. Apply ALL 18 migrations in filename order, with only the STEP 2 edits. If one times out, split it into parts and run each part with "set lock_timeout = '10s';". Never skip one, never reorder.
 2. Verify:
    select jobname, schedule from cron.job;  → cancel-stale-payment-orders, meta-dispatch, play-report
    select extname from pg_extension;        → includes pg_cron and pg_net
