@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 import requests
 
 # Must match the agent's install location (a WRITABLE folder).
-BASE_DIR = os.environ.get("MONITOR_DIR", r"C:\\ProgramData\\Monitor")
+BASE_DIR = os.environ.get("MONITOR_DIR", r"C:\ProgramData\Monitor")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 HEARTBEAT_PATH = os.path.join(BASE_DIR, "agent.heartbeat")
 DEVICE_ID_PATH = os.path.join(BASE_DIR, "device_id.txt")
