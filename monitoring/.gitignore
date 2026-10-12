@@ -1,0 +1,15 @@
+# Build artifacts
+**/build/
+**/dist/
+**/*.spec
+__pycache__/
+*.pyc
+
+# Runtime / secrets — never commit a filled-in config or buffers
+agent/config.json
+config.json
+*.sqlite
+*.heartbeat
+*.log
+consent_shown.flag
+device_id.txt
