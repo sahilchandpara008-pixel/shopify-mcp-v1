@@ -1,0 +1,21 @@
+# Deploy this folder as a static site on Netlify.
+#   netlify deploy --dir=monitoring/dashboard --prod
+# Or drag the folder onto https://app.netlify.com/drop
+#
+# IMPORTANT: the dashboard must be served from REAL static hosting (Netlify /
+# Vercel / your own server). Do NOT run it inside a sandboxed preview iframe
+# that blocks outbound fetch to *.supabase.co — that causes "Failed to fetch"
+# on login.
+
+[build]
+  publish = "."
+
+# A conservative Content-Security-Policy: allow only the supabase-js CDN and
+# your Supabase project. Replace YOUR-ref with your project ref, or widen
+# connect-src to https://*.supabase.co if you prefer.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'"

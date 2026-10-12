@@ -1,0 +1,5 @@
+requests>=2.31
+mss>=9.0
+Pillow>=10.0
+pystray>=0.19
+pyinstaller>=6.0

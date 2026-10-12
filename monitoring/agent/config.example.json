@@ -1,0 +1,15 @@
+{
+  "company_name": "Example Corp",
+  "employee_name": "Jane Doe",
+  "supabase_url": "https://YOUR-PROJECT-ref.supabase.co",
+  "supabase_anon_key": "eyJhbGciOi...PASTE-LEGACY-ANON-JWT-HERE...",
+  "screenshot_interval_sec": 10,
+  "activity_interval_sec": 30,
+  "idle_threshold_sec": 60,
+  "max_screenshot_width": 1600,
+  "jpeg_quality": 40,
+  "upload_batch": 20,
+  "telegram_bot_token": "",
+  "telegram_chat_id": "",
+  "notify_on_tamper": true
+}
