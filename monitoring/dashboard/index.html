@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Workplace Monitoring Dashboard</title>
+<!-- Only external network: the pinned supabase-js CDN + your Supabase project. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --panel-2: #f0f2f5; --border: #d9dde3;
+    --text: #1b1f24; --muted: #5b6672; --accent: #1565c0; --accent-text:#fff;
+    --online: #2e7d32; --away: #ef6c00; --offline: #90a4ae; --danger: #c62828;
+    --danger-bg: #fdecea; --shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#14171c; --panel:#1d2127; --panel-2:#23272e; --border:#333a44;
+      --text:#e7eaee; --muted:#9aa5b1; --accent:#4f9cf0; --accent-text:#0b1016;
+      --online:#66bb6a; --away:#ffa726; --offline:#78909c; --danger:#ef5350;
+      --danger-bg:#3a1d1d; --shadow:0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#14171c; --panel:#1d2127; --panel-2:#23272e; --border:#333a44;
+    --text:#e7eaee; --muted:#9aa5b1; --accent:#4f9cf0; --accent-text:#0b1016;
+    --online:#66bb6a; --away:#ffa726; --offline:#78909c; --danger:#ef5350;
+    --danger-bg:#3a1d1d; --shadow:0 1px 3px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  header {
+    display:flex; align-items:center; gap:12px; padding:14px 16px;
+    background:var(--panel); border-bottom:1px solid var(--border); box-shadow:var(--shadow);
+    position:sticky; top:0; z-index:5; flex-wrap:wrap;
+  }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  .btn {
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text);
+    padding:8px 14px; border-radius:8px; cursor:pointer; font-size:14px;
+  }
+  .btn.primary { background:var(--accent); color:var(--accent-text); border-color:transparent; }
+  .btn:hover { filter:brightness(1.05); }
+  main { padding:16px; max-width:1200px; margin:0 auto; }
+  .hidden { display:none !important; }
+
+  /* Setup / login cards */
+  .center-card {
+    max-width:440px; margin:8vh auto; background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:24px; box-shadow:var(--shadow);
+  }
+  .center-card h2 { margin-top:0; }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input {
+    width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px;
+    background:var(--bg); color:var(--text); font-size:14px;
+  }
+  .pw-wrap { position:relative; }
+  .pw-wrap input { padding-right:44px; }
+  .eye {
+    position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    background:none; border:none; cursor:pointer; font-size:18px; color:var(--muted); padding:6px;
+  }
+  .err { color:var(--danger); font-size:13px; margin-top:10px; min-height:18px; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; }
+
+  /* Banner */
+  .banner {
+    background:var(--danger-bg); color:var(--danger); border:1px solid var(--danger);
+    padding:10px 14px; border-radius:10px; margin-bottom:16px; font-weight:600;
+  }
+
+  /* Employee cards */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
+  .card {
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:16px; box-shadow:var(--shadow); cursor:pointer; transition:transform .05s;
+  }
+  .card:hover { transform:translateY(-2px); }
+  .card h3 { margin:0 0 4px; font-size:16px; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .status-online .dot{background:var(--online)} .status-away .dot{background:var(--away)}
+  .status-offline .dot{background:var(--offline)}
+  .chip {
+    font-size:11px; padding:2px 8px; border-radius:999px; background:var(--panel-2);
+    color:var(--muted); border:1px solid var(--border);
+  }
+  .chip.danger { background:var(--danger-bg); color:var(--danger); border-color:var(--danger); }
+  .metric { color:var(--muted); font-size:13px; margin-top:8px; }
+  .metric b { color:var(--text); }
+
+  /* Detail */
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:14px 0; }
+  .tile { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; box-shadow:var(--shadow); }
+  .tile .big { font-size:26px; font-weight:700; }
+  .tile .lbl { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .section { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; margin:14px 0; box-shadow:var(--shadow); }
+  .section h3 { margin-top:0; }
+  .bar-row { display:flex; align-items:center; gap:10px; margin:6px 0; }
+  .bar-row .name { width:180px; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar-track { flex:1; background:var(--panel-2); border-radius:6px; height:14px; overflow:hidden; }
+  .bar-fill { height:100%; background:var(--accent); }
+  .bar-row .val { width:70px; text-align:right; font-size:12px; color:var(--muted); }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
+  .gallery figure { margin:0; }
+  .gallery img { width:100%; border-radius:8px; border:1px solid var(--border); display:block; }
+  .gallery figcaption { font-size:11px; color:var(--muted); margin-top:4px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); }
+  .muted { color:var(--muted); }
+  .lightbox {
+    position:fixed; inset:0; background:rgba(0,0,0,.85); display:flex; align-items:center;
+    justify-content:center; z-index:50; cursor:zoom-out;
+  }
+  .lightbox img { max-width:94vw; max-height:94vh; border-radius:8px; }
+</style>
+</head>
+<body>
+
+<!-- ===================== SETUP (URL + anon key) ===================== -->
+<section id="setup" class="center-card">
+  <h2>Connect to Supabase</h2>
+  <p class="hint">Enter your Supabase project URL and the <b>legacy anon key</b>
+     (it begins with <code>eyJ</code> — not a <code>sb_publishable_</code> key).
+     These are stored in your browser only (localStorage).</p>
+  <label for="s-url">Supabase URL</label>
+  <input id="s-url" placeholder="https://YOUR-ref.supabase.co" autocomplete="off" />
+  <label for="s-key">Anon key (eyJ…)</label>
+  <input id="s-key" placeholder="eyJhbGciOi..." autocomplete="off" />
+  <div class="err" id="setup-err"></div>
+  <button class="btn primary" id="setup-save" style="margin-top:14px;width:100%">Save &amp; continue</button>
+</section>
+
+<!-- ===================== LOGIN ===================== -->
+<section id="login" class="center-card hidden">
+  <h2>Admin sign in</h2>
+  <p class="hint">Sign in with the admin account you created under
+     <b>Authentication → Users → Add user</b> (tick “Auto Confirm User”).</p>
+  <label for="l-email">Email</label>
+  <input id="l-email" type="email" autocomplete="username" />
+  <label for="l-pass">Password</label>
+  <div class="pw-wrap">
+    <input id="l-pass" type="password" autocomplete="current-password" />
+    <button type="button" class="eye" id="l-eye" aria-label="Show password">👁</button>
+  </div>
+  <div class="err" id="login-err"></div>
+  <button class="btn primary" id="login-btn" style="margin-top:14px;width:100%">Sign in</button>
+  <button class="btn" id="login-reset" style="margin-top:8px;width:100%">Change Supabase connection</button>
+</section>
+
+<!-- ===================== APP ===================== -->
+<div id="app" class="hidden">
+  <header>
+    <span class="dot" style="background:var(--accent);width:14px;height:14px"></span>
+    <h1>Workplace Monitoring</h1>
+    <button class="btn" id="theme-btn">Theme</button>
+    <button class="btn" id="refresh-btn">Refresh</button>
+    <button class="btn" id="logout-btn">Sign out</button>
+  </header>
+  <main>
+    <div id="overview-view">
+      <div id="global-banner"></div>
+      <div class="grid" id="cards"></div>
+      <p class="muted" id="empty-note"></p>
+    </div>
+
+    <div id="detail-view" class="hidden">
+      <button class="btn" id="back-btn">← Back</button>
+      <div class="row" style="margin-top:12px;justify-content:space-between">
+        <h2 id="d-name" style="margin:0"></h2>
+        <div class="row">
+          <label style="margin:0">Date</label>
+          <input id="d-date" type="date" style="width:auto" />
+        </div>
+      </div>
+      <div id="d-banner"></div>
+      <div class="tiles" id="d-tiles"></div>
+
+      <div class="section">
+        <h3>Top apps by active time</h3>
+        <div id="d-apps"></div>
+      </div>
+
+      <div class="section">
+        <h3>Interruptions (agent stopped)</h3>
+        <div id="d-interruptions"></div>
+      </div>
+
+      <div class="section">
+        <h3>Screenshots</h3>
+        <div class="gallery" id="d-gallery"></div>
+        <p class="muted" id="d-gallery-note"></p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+const LS = {
+  url: "wm_supabase_url", key: "wm_supabase_key", theme: "wm_theme",
+};
+let sb = null;            // supabase client
+let currentDetail = null; // device_id being viewed
+
+// ---------- theme ----------
+function applyTheme(t) {
+  if (t) document.documentElement.setAttribute("data-theme", t);
+  else document.documentElement.removeAttribute("data-theme");
+}
+applyTheme(localStorage.getItem(LS.theme) || "");
+document.getElementById("theme-btn").onclick = () => {
+  const cur = localStorage.getItem(LS.theme) || "";
+  const next = cur === "dark" ? "light" : cur === "light" ? "" : "dark";
+  if (next) localStorage.setItem(LS.theme, next); else localStorage.removeItem(LS.theme);
+  applyTheme(next);
+};
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+function show(id){ $(id).classList.remove("hidden"); }
+function hide(id){ $(id).classList.add("hidden"); }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtDur(sec){
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function sinceStr(ts){
+  if (!ts) return "never";
+  const d = (Date.now() - new Date(ts).getTime())/1000;
+  if (d < 90) return "just now";
+  if (d < 3600) return Math.round(d/60)+"m ago";
+  if (d < 86400) return Math.round(d/3600)+"h ago";
+  return Math.round(d/86400)+"d ago";
+}
+
+// ---------- bootstrap ----------
+function initClient(){
+  const url = localStorage.getItem(LS.url);
+  const key = localStorage.getItem(LS.key);
+  if (!url || !key) return false;
+  sb = window.supabase.createClient(url, key);
+  return true;
+}
+
+async function boot(){
+  if (!initClient()){ show("setup"); return; }
+  hide("setup");
+  const { data } = await sb.auth.getSession();
+  if (data && data.session){ startApp(); }
+  else { show("login"); $("l-email").focus(); }
+}
+
+// ---------- setup ----------
+$("setup-save").onclick = () => {
+  const url = $("s-url").value.trim().replace(/\/+$/,"");
+  const key = $("s-key").value.trim();
+  const err = $("setup-err");
+  if (!/^https:\/\/.+\.supabase\./.test(url)){ err.textContent="Enter a valid https Supabase URL."; return; }
+  if (!key.startsWith("eyJ")){ err.textContent='Use the LEGACY anon key (starts with "eyJ"), not sb_publishable_.'; return; }
+  localStorage.setItem(LS.url, url);
+  localStorage.setItem(LS.key, key);
+  err.textContent="";
+  boot();
+};
+
+// ---------- login ----------
+$("l-eye").onclick = () => {
+  const p = $("l-pass");
+  const showing = p.type === "text";
+  p.type = showing ? "password" : "text";
+  $("l-eye").textContent = showing ? "👁" : "🙈";
+};
+$("login-btn").onclick = async () => {
+  const err = $("login-err"); err.textContent="";
+  const email = $("l-email").value.trim();
+  const password = $("l-pass").value;
+  $("login-btn").disabled = true;
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    hide("login"); startApp();
+  } catch(e){
+    err.textContent = (e && e.message) ? e.message : "Sign-in failed.";
+  } finally {
+    $("login-btn").disabled = false;
+  }
+};
+$("login-reset").onclick = () => {
+  localStorage.removeItem(LS.url); localStorage.removeItem(LS.key);
+  hide("login"); location.reload();
+};
+
+// ---------- app ----------
+function startApp(){ hide("setup"); hide("login"); show("app"); loadOverview(); }
+
+$("logout-btn").onclick = async () => { await sb.auth.signOut(); location.reload(); };
+$("refresh-btn").onclick = () => currentDetail ? openDetail(currentDetail) : loadOverview();
+$("back-btn").onclick = () => { currentDetail=null; hide("detail-view"); show("overview-view"); loadOverview(); };
+
+function statusFromLastSeen(lastSeen, idleNow){
+  if (!lastSeen) return "offline";
+  const age = (Date.now()-new Date(lastSeen).getTime())/1000;
+  if (age > 180) return "offline";
+  return idleNow ? "away" : "online";
+}
+
+async function loadOverview(){
+  const cards = $("cards"); cards.innerHTML = "<p class='muted'>Loading…</p>";
+  $("global-banner").innerHTML = "";
+  const start = todayStr()+"T00:00:00";
+
+  const { data: devices, error } = await sb.from("devices").select("*").order("employee_name");
+  if (error){ cards.innerHTML = "<p class='err'>"+esc(error.message)+"</p>"; return; }
+  if (!devices || !devices.length){
+    cards.innerHTML=""; $("empty-note").textContent="No devices have reported yet.";
+    return;
+  }
+  $("empty-note").textContent="";
+
+  // Pull today's samples + stop events for all devices.
+  const { data: samples } = await sb.from("activity_samples")
+    .select("device_id,ts,is_idle,active_app").gte("ts", start).order("ts");
+  const { data: stops } = await sb.from("events")
+    .select("device_id,ts,type").eq("type","agent_stopped").gte("ts", start);
+
+  const byDev = {};
+  (samples||[]).forEach(s=>{ (byDev[s.device_id]=byDev[s.device_id]||[]).push(s); });
+  const stopSet = new Set((stops||[]).map(s=>s.device_id));
+
+  cards.innerHTML = "";
+  let anyStop = false;
+  for (const d of devices){
+    const sList = byDev[d.device_id] || [];
+    // Each sample represents one activity interval; infer active vs idle minutes.
+    const totals = estimateActiveIdle(sList);
+    const lastIdle = sList.length ? !!sList[sList.length-1].is_idle : false;
+    const status = statusFromLastSeen(d.last_seen, lastIdle);
+    const stopped = stopSet.has(d.device_id);
+    if (stopped) anyStop = true;
+
+    const el = document.createElement("div");
+    el.className = "card status-"+status;
+    el.innerHTML = `
+      <h3>${esc(d.employee_name||"(unnamed)")}</h3>
+      <div class="row">
+        <span class="dot"></span><span>${status}</span>
+        <span class="chip">${esc(d.hostname||"")}</span>
+        ${stopped?'<span class="chip danger">stopped today</span>':''}
+      </div>
+      <div class="metric">Active <b>${fmtDur(totals.active)}</b> · Idle <b>${fmtDur(totals.idle)}</b></div>
+      <div class="metric">Last seen <b>${sinceStr(d.last_seen)}</b></div>`;
+    el.onclick = () => openDetail(d.device_id);
+    cards.appendChild(el);
+  }
+  if (anyStop){
+    $("global-banner").innerHTML =
+      `<div class="banner">⚠️ One or more agents were stopped today — see the affected employees below.</div>`;
+  }
+}
+
+// Estimate active/idle seconds from discrete samples (each ~activity_interval apart).
+function estimateActiveIdle(samples){
+  if (!samples.length) return {active:0, idle:0};
+  // Assume the nominal spacing from median gap, capped so a long offline gap
+  // doesn't inflate totals.
+  let active=0, idle=0;
+  for (let i=0;i<samples.length;i++){
+    let gap = 30;
+    if (i>0){
+      gap = (new Date(samples[i].ts)-new Date(samples[i-1].ts))/1000;
+      if (gap<=0 || gap>300) gap = 30; // cap gaps / offline jumps
+    }
+    if (samples[i].is_idle) idle += gap; else active += gap;
+  }
+  return {active, idle};
+}
+
+async function openDetail(deviceId){
+  currentDetail = deviceId;
+  hide("overview-view"); show("detail-view");
+  if (!$("d-date").value) $("d-date").value = todayStr();
+  $("d-date").onchange = () => renderDetail(deviceId);
+  renderDetail(deviceId);
+}
+
+async function renderDetail(deviceId){
+  const day = $("d-date").value || todayStr();
+  const start = day+"T00:00:00", end = day+"T23:59:59.999";
+
+  const { data: dev } = await sb.from("devices").select("*").eq("device_id",deviceId).single();
+  $("d-name").textContent = (dev && dev.employee_name) || deviceId;
+
+  const { data: samples } = await sb.from("activity_samples")
+    .select("ts,active_app,window_title,is_idle,idle_seconds")
+    .eq("device_id",deviceId).gte("ts",start).lte("ts",end).order("ts");
+  const { data: shots } = await sb.from("screenshots")
+    .select("ts,storage_path,width,height")
+    .eq("device_id",deviceId).gte("ts",start).lte("ts",end).order("ts",{ascending:false});
+  const { data: stops } = await sb.from("events")
+    .select("ts,type,detail").eq("device_id",deviceId)
+    .in("type",["agent_stopped","agent_recovered"]).gte("ts",start).lte("ts",end).order("ts");
+
+  // tiles
+  const totals = estimateActiveIdle(samples||[]);
+  const stopCount = (stops||[]).filter(s=>s.type==="agent_stopped").length;
+  $("d-tiles").innerHTML = `
+    <div class="tile"><div class="lbl">Active</div><div class="big">${fmtDur(totals.active)}</div></div>
+    <div class="tile"><div class="lbl">Idle</div><div class="big">${fmtDur(totals.idle)}</div></div>
+    <div class="tile"><div class="lbl">Samples</div><div class="big">${(samples||[]).length}</div></div>
+    <div class="tile"><div class="lbl">Interruptions</div><div class="big">${stopCount}</div></div>`;
+
+  $("d-banner").innerHTML = stopCount
+    ? `<div class="banner">⚠️ Agent was stopped ${stopCount} time(s) on ${day}.</div>` : "";
+
+  // top apps by active time
+  const appTime = {};
+  (samples||[]).forEach((s,i,arr)=>{
+    if (s.is_idle) return;
+    let gap = 30;
+    if (i>0){ const g=(new Date(s.ts)-new Date(arr[i-1].ts))/1000; gap=(g>0&&g<=300)?g:30; }
+    const key = s.active_app || "(unknown)";
+    appTime[key] = (appTime[key]||0)+gap;
+  });
+  const apps = Object.entries(appTime).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const maxT = apps.length ? apps[0][1] : 1;
+  $("d-apps").innerHTML = apps.length ? apps.map(([n,t])=>`
+    <div class="bar-row">
+      <div class="name" title="${esc(n)}">${esc(n)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.round(100*t/maxT)}%"></div></div>
+      <div class="val">${fmtDur(t)}</div>
+    </div>`).join("") : "<p class='muted'>No activity recorded.</p>";
+
+  // interruptions
+  $("d-interruptions").innerHTML = (stops&&stops.length) ? `
+    <table><thead><tr><th>Time</th><th>Type</th><th>Detail</th></tr></thead><tbody>
+    ${stops.map(s=>`<tr><td>${new Date(s.ts).toLocaleTimeString()}</td>
+       <td>${esc(s.type)}</td><td class="muted">${esc(s.detail||"")}</td></tr>`).join("")}
+    </tbody></table>` : "<p class='muted'>No interruptions on this day.</p>";
+
+  // screenshots (signed URLs)
+  const gal = $("d-gallery"); gal.innerHTML = "";
+  $("d-gallery-note").textContent = "";
+  if (!shots || !shots.length){ $("d-gallery-note").textContent = "No screenshots on this day."; return; }
+  const paths = shots.map(s=>s.storage_path);
+  const { data: signed, error: sErr } =
+    await sb.storage.from("screenshots").createSignedUrls(paths, 3600);
+  if (sErr){ $("d-gallery-note").textContent = "Could not sign URLs: "+sErr.message; return; }
+  const urlByPath = {};
+  (signed||[]).forEach(x=>{ if (x.signedUrl) urlByPath[x.path]=x.signedUrl; });
+  shots.slice(0,120).forEach(s=>{
+    const u = urlByPath[s.storage_path];
+    if (!u) return;
+    const fig = document.createElement("figure");
+    fig.innerHTML = `<img loading="lazy" src="${u}" />
+      <figcaption>${new Date(s.ts).toLocaleTimeString()}</figcaption>`;
+    fig.querySelector("img").onclick = () => lightbox(u);
+    gal.appendChild(fig);
+  });
+}
+
+function lightbox(url){
+  const box = document.createElement("div");
+  box.className = "lightbox";
+  box.innerHTML = `<img src="${url}" />`;
+  box.onclick = () => box.remove();
+  document.body.appendChild(box);
+}
+
+boot();
+</script>
+</body>
+</html>
